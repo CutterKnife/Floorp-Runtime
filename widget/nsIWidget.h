@@ -82,6 +82,7 @@ enum class HapticFeedbackType : uint8_t {
   ShortPress = 0,
   LongPress = 1,
   TextHandleMove = 2,
+  ThresholdCrossing = 3,
 
   End,  // Not a feedback type, only to mark the upper boundary
 };
@@ -2348,7 +2349,6 @@ class nsIWidget : public nsSupportsWeakReference {
   bool IsPuppetWidget() const { return mWidgetType == WidgetType::Puppet; }
   bool IsHeadlessWidget() const { return mWidgetType == WidgetType::Headless; }
   bool IsNativeWidget() const { return mWidgetType == WidgetType::Native; }
-  virtual bool IsMacWebAppWidget() const { return false; }
 
   using WindowButtonType = mozilla::WindowButtonType;
 
