@@ -3,9 +3,11 @@
 import ast
 import copy
 import hashlib
+import io
 import json
 import os
 import re
+import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -16,7 +18,7 @@ from unittest import mock
 import qa3_hosted as hosted
 import qa3_hosted_boundary as boundary
 from qa3_mozlog import verify_mozlog
-from qa3_native_io import GIB, read_json, write_json
+from qa3_native_io import GIB, IOBudget, extract_archive, read_json, write_json
 from qa3_native_transport import verify_artifact_metadata
 from qa3_source_cohort import file_digest
 
@@ -149,6 +151,122 @@ def producer():
             )
         },
     }
+
+
+class HostedEntryBudgets(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def probe(self, role, mode):
+        maximum, reserve = (
+            (30 * GIB, 20 * GIB)
+            if role == "producer"
+            else (
+                50 * GIB,
+                10 * GIB,
+            )
+        )
+        inputs = self.root / "inputs"
+        inputs.mkdir()
+        archive = inputs / "runtime.tar.xz"
+        with tarfile.open(archive, "w:xz") as output:
+            member = tarfile.TarInfo("fixture")
+            member.size = 4
+            output.addfile(member, io.BytesIO(b"data"))
+        state = self.root / "state"
+        source = self.root / "source"
+        source.mkdir()
+        args = SimpleNamespace(
+            source=source,
+            objdir=source / "obj",
+            output=state,
+            primary=inputs,
+            build_id=context()["buildID"],
+        )
+        value = producer()
+        value["primarySha256"] = file_digest(archive)
+        (inputs / "test-support.tar.gz").write_bytes(b"synthetic support")
+        value["supportSha256"] = file_digest(inputs / "test-support.tar.gz")
+        write_json(inputs / "producer.json", value)
+        budgets = []
+
+        class ProbeComplete(Exception):
+            pass
+
+        def extract(path, destination, *, budget, expansion):
+            self.assertIsInstance(budget, IOBudget)
+            self.assertEqual(budget.root, state)
+            self.assertEqual(budget.maximum, maximum)
+            self.assertEqual(budget.minimum_free, reserve)
+            budgets.append(budget)
+            if mode == "cumulative":
+                budget.used = maximum
+            extract_archive(path, destination, budget=budget, expansion=expansion)
+            self.assertEqual((destination / "fixture").read_bytes(), b"data")
+            raise ProbeComplete
+
+        def command(argv, cwd, env, logs, name, timeout, **kwargs):
+            self.assertEqual(name, "effective-config")
+            config = effective()
+            config.update(source=str(source), objdir=str(args.objdir))
+            write_json(state / "effective-config.json", config)
+            return {"name": name, "exit": 0}
+
+        expected = ProbeComplete if mode == "available" else ValueError
+        message = {
+            "available": "",
+            "reserve": "native I/O would consume reserved free space",
+            "cumulative": "cumulative staging byte budget exceeded",
+        }[mode]
+        free = reserve if mode == "reserve" else 100 * GIB
+        with mock.patch.dict(
+            os.environ, {"HOME": str(self.root), "PATH": os.defpath}, clear=True
+        ), mock.patch.object(
+            hosted, "context_from_environment", return_value=context()
+        ), mock.patch.object(
+            hosted, "raw_git", return_value=(SHA + "\n").encode()
+        ), mock.patch.object(
+            hosted, "host_identity", return_value=HOST
+        ), mock.patch.object(
+            hosted, "worker_boot_identity", return_value="d" * 64
+        ), mock.patch.object(hosted.os, "geteuid", return_value=1001), mock.patch(
+            "qa3_native_io.shutil.disk_usage", return_value=SimpleNamespace(free=free)
+        ), mock.patch.object(
+            hosted, "run_owned", side_effect=command
+        ) as commands, mock.patch.object(
+            hosted, "extract_archive", side_effect=extract
+        ) as extracts, self.assertRaisesRegex(expected, message):
+            if role == "producer":
+                hosted.produce(args)
+            else:
+                hosted.consume(inputs, state, SOURCE, context())
+        self.assertEqual(commands.call_count, 1 if role == "producer" else 0)
+        self.assertEqual(extracts.call_count, 1)
+        self.assertEqual(len(budgets), 1)
+        self.assertEqual(
+            budgets[0].used,
+            maximum if mode == "cumulative" else 4 if mode == "available" else 0,
+        )
+
+    def test_producer_entry_extracts_with_bounded_real_io(self):
+        self.probe("producer", "available")
+
+    def test_producer_entry_rejects_reserved_space_exhaustion(self):
+        self.probe("producer", "reserve")
+
+    def test_producer_entry_rejects_cumulative_staging_overflow(self):
+        self.probe("producer", "cumulative")
+
+    def test_consumer_entry_extracts_with_bounded_real_io(self):
+        self.probe("consumer", "available")
+
+    def test_consumer_entry_rejects_reserved_space_exhaustion(self):
+        self.probe("consumer", "reserve")
+
+    def test_consumer_entry_rejects_cumulative_staging_overflow(self):
+        self.probe("consumer", "cumulative")
 
 
 class HostedContracts(unittest.TestCase):

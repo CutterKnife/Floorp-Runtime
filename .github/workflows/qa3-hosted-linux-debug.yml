@@ -5,7 +5,7 @@ name: QA3 Hosted Debug to Cold Consumer
 
 'on':
   push:
-    branches: [codex/qa3-actions-native-proof]
+    branches: [codex/qa3-actions-native-proof-qa337-02]
 
 permissions:
   contents: read
@@ -16,7 +16,7 @@ jobs:
     if: >-
       github.repository == 'Floorp-Projects/Floorp-Runtime' &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/codex/qa3-actions-native-proof'
+      github.ref == 'refs/heads/codex/qa3-actions-native-proof-qa337-02'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
