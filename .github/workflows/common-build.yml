@@ -28,6 +28,11 @@ name: Common Build Workflow
         type: boolean
         required: false
         default: false
+      qa3-debug-tests:
+        description: 'Package canonical Debug tests for the same-run cold consumer'
+        type: boolean
+        required: false
+        default: false
       pgo:
         description: 'Enable Profile-Guided Optimization'
         type: boolean
@@ -60,17 +65,22 @@ name: Common Build Workflow
       expected-build-id:
         description: 'Validated build ID used for this build'
         value: ${{ jobs.build.outputs.expected-build-id }}
+      qa3-consumer-verdict:
+        description: 'Cold Debug harness result; never product or publication qualification'
+        value: ${{ jobs.qa3-consumer.outputs.verdict }}
 
 jobs:
   build:
     name: Build ${{ inputs.platform }}-${{ inputs.arch }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.qa3-debug-tests && 'ubuntu-24.04' || 'ubuntu-latest' }}
     timeout-minutes: 360
     outputs:
       artifact-name: ${{ steps.build-identity.outputs.artifact-name }}
       artifact-id: ${{ steps.upload-primary-artifact.outputs.artifact-id }}
       artifact-digest: ${{ steps.upload-primary-artifact.outputs.artifact-digest }}
       expected-build-id: ${{ steps.build-identity.outputs.expected-build-id }}
+      qa3-support-id: ${{ steps.qa3-support.outputs.artifact-id }}
+      qa3-support-digest: ${{ steps.qa3-support.outputs.artifact-digest }}
 
     steps:
       - name: Validate build identity
@@ -99,6 +109,27 @@ jobs:
         with:
           submodules: >-
             ${{ inputs.platform == 'mac' && 'recursive' || 'true' }}
+
+      - name: Validate opt-in Debug test route
+        if: inputs.qa3-debug-tests
+        env:
+          QA3_PLATFORM: ${{ inputs.platform }}
+          QA3_ARCH: ${{ inputs.arch }}
+          QA3_DEBUG: ${{ toJSON(inputs.debug) }}
+          QA3_PGO: ${{ toJSON(inputs.pgo) }}
+          QA3_PGO_MODE: ${{ inputs.pgo_mode }}
+          QA3_BUILD_ID: ${{ inputs.MOZ_BUILD_DATE }}
+        run: |
+          python3.12 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, '.github/workflows/scripts')
+          from qa3_hosted import context_from_environment, validate_mode
+          validate_mode(os.environ['QA3_PLATFORM'], os.environ['QA3_ARCH'],
+                        json.loads(os.environ['QA3_DEBUG']), json.loads(os.environ['QA3_PGO']),
+                        os.environ['QA3_PGO_MODE'])
+          context_from_environment(os.environ['QA3_BUILD_ID'])
+          PY
+          echo 'SCCACHE_GHA_RW_MODE=READ_ONLY' >> "$GITHUB_ENV"
 
       - name: Download macOS SDK
         if: inputs.platform == 'mac'
@@ -182,6 +213,47 @@ jobs:
           python3 .github/workflows/scripts/record_runtime_source.py \
             --output "$HOME/output/floorp-${PLATFORM}-${ARCH}-moz-artifact-bundle/runtime-source-provenance.json"
 
+      - name: Package same-OBJDIR Debug test support
+        if: inputs.qa3-debug-tests
+        env:
+          QA3_BUILD_ID: ${{ inputs.MOZ_BUILD_DATE }}
+        run: |
+          python3.12 .github/workflows/scripts/qa3_hosted.py produce \
+            --source "$GITHUB_WORKSPACE" \
+            --objdir "$GITHUB_WORKSPACE/obj-x86_64-pc-linux-gnu" \
+            --primary "$HOME/output/floorp-linux-x86_64-moz-artifact-bundle" \
+            --build-id "$QA3_BUILD_ID" --output "$RUNNER_TEMP/qa3-hosted-producer"
+
+      - name: Upload same-run Debug support
+        if: inputs.qa3-debug-tests
+        id: qa3-support
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa3-support-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/qa3-hosted-producer/runtime.tar.xz
+            ${{ runner.temp }}/qa3-hosted-producer/test-support.tar.gz
+            ${{ runner.temp }}/qa3-hosted-producer/producer.json
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Preserve original Debug packaging diagnostics
+        if: always() && inputs.qa3-debug-tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa3-producer-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/qa3-hosted-producer/failure.json
+            ${{ runner.temp }}/qa3-hosted-producer/effective-config.json
+            ${{ runner.temp }}/qa3-hosted-producer/producer.json
+            ${{ runner.temp }}/qa3-hosted-producer/logs/*.stderr
+            ${{ runner.temp }}/qa3-hosted-producer/logs/*.process.json
+            ${{ runner.temp }}/qa3-hosted-producer/logs/effective-config.stdout
+            ${{ runner.temp }}/qa3-hosted-producer/logs/package-tests.stdout
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Upload build artifact
         id: upload-primary-artifact
         uses: actions/upload-artifact@v4
@@ -191,6 +263,7 @@ jobs:
             ${{ format('~/output/floorp-{0}-{1}-moz-artifact-bundle',
             inputs.platform, inputs.arch) }}
           if-no-files-found: error
+          retention-days: ${{ inputs.qa3-debug-tests && 1 || 0 }}
           overwrite: true
 
       - name: Upload PGO profile generation package (Windows)
@@ -242,6 +315,7 @@ jobs:
             ${{ format('~/output/floorp-{0}-{1}-moz-artifact-bundle/dist-host',
             inputs.platform, inputs.arch) }}
           if-no-files-found: error
+          retention-days: ${{ inputs.qa3-debug-tests && 1 || 0 }}
           overwrite: true
 
       - name: Upload application.ini for MAR
@@ -252,4 +326,101 @@ jobs:
             ${{ format('~/output/floorp-{0}-{1}-moz-artifact-bundle/floorp-application.ini',
             inputs.platform, inputs.arch) }}
           if-no-files-found: error
+          retention-days: ${{ inputs.qa3-debug-tests && 1 || 0 }}
           overwrite: true
+
+  qa3-consumer:
+    name: Cold Linux x64 Debug harness
+    needs: build
+    if: inputs.qa3-debug-tests
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      verdict: ${{ steps.collect.outputs.verdict }}
+    steps:
+      - name: Checkout exact consumer recipe
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github
+
+      - name: Acquire original same-run producer artifact
+        id: acquire
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          QA3_ARTIFACT_ID: ${{ needs.build.outputs.qa3-support-id }}
+          QA3_ARTIFACT_DIGEST: ${{ needs.build.outputs.qa3-support-digest }}
+          QA3_BUILD_ID: ${{ inputs.MOZ_BUILD_DATE }}
+        run: |
+          python3.12 .github/workflows/scripts/qa3_hosted.py acquire \
+            --artifact-id "$QA3_ARTIFACT_ID" --artifact-sha256 "$QA3_ARTIFACT_DIGEST" \
+            --build-id "$QA3_BUILD_ID" --recipe "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/qa3-hosted-download"
+
+      - name: Execute dedicated cold consumer
+        id: launch
+        run: |
+          sudo -n /usr/bin/python3.12 -I - \
+            "$GITHUB_WORKSPACE" "$GITHUB_SHA" "$RUNNER_TEMP/qa3-hosted-download/inputs" <<'PY'
+          import os, re, stat, subprocess, sys
+          from pathlib import Path
+          source = Path(sys.argv[1]).resolve(strict=True)
+          sha = sys.argv[2]
+          if not re.fullmatch('[0-9a-f]{40}', sha):
+              raise ValueError('invalid original Runtime revision')
+          env = {'PATH': '/usr/bin:/bin', 'GIT_CONFIG_NOSYSTEM': '1',
+                 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_NO_LAZY_FETCH': '1',
+                 'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_TERMINAL_PROMPT': '0'}
+          git = ['/usr/bin/git', '-C', str(source), '-c', 'safe.directory=' + str(source),
+                 '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null']
+          if subprocess.check_output(git + ['rev-parse', 'HEAD'], env=env, timeout=30).decode().strip() != sha:
+              raise ValueError('checkout differs from original Runtime revision')
+          parent = Path('/var/lib')
+          for ancestor in (parent, *parent.parents):
+              info = ancestor.lstat()
+              if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                  raise ValueError('unsafe bootstrap ancestor')
+          staging = parent / ('qa3-hosted-bootstrap-' + sha)
+          staging.mkdir(mode=0o755)
+          names = ('qa3_hosted.py', 'qa3_hosted_support.py', 'qa3_hosted_boundary.py',
+                   'qa3_native_io.py', 'qa3_native_transport.py', 'qa3_mozlog.py',
+                   'qa3_source_cohort.py', 'qa3_build_profile.py', 'runtime_build_context.py',
+                   'qa3_xpcshell_entry.py')
+          for name in names:
+              relative = '.github/workflows/scripts/' + name
+              raw = subprocess.check_output(git + ['cat-file', 'blob', sha + ':' + relative],
+                                            env=env, timeout=30)
+              if raw != (source / relative).read_bytes():
+                  raise ValueError('consumer code differs from raw Runtime blob')
+              descriptor = os.open(staging / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o444)
+              with os.fdopen(descriptor, 'wb') as output:
+                  output.write(raw)
+          os.execve('/usr/bin/python3.12', ['/usr/bin/python3.12', '-I',
+                    str(staging / 'qa3_hosted_boundary.py'), 'launch',
+                    '--inputs', sys.argv[3], '--recipe', str(source)],
+                    {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
+          PY
+
+      - name: Collect original bounded evidence
+        id: collect
+        if: always()
+        env:
+          QA3_BUILD_ID: ${{ inputs.MOZ_BUILD_DATE }}
+          QA3_LAUNCH_OUTCOME: ${{ steps.launch.outcome }}
+          QA3_ACQUIRE_OUTCOME: ${{ steps.acquire.outcome }}
+        run: |
+          python3.12 .github/workflows/scripts/qa3_hosted_boundary.py collect \
+            --build-id "$QA3_BUILD_ID" --output "$RUNNER_TEMP/qa3-hosted-evidence"
+
+      - name: Upload cold consumer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa3-consumer-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qa3-hosted-evidence
+          if-no-files-found: error
+          retention-days: 1

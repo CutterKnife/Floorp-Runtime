@@ -1,0 +1,55 @@
+---
+# SPDX-License-Identifier: MPL-2.0
+
+name: QA3 Hosted Debug to Cold Consumer
+
+'on':
+  push:
+    branches: [codex/qa3-actions-native-proof]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  contracts:
+    if: >-
+      github.repository == 'Floorp-Projects/Floorp-Runtime' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/codex/qa3-actions-native-proof'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Reject updates, deletion and reruns
+        run: |
+          python3.12 - <<'PY'
+          import json, os
+          from pathlib import Path
+          event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+          if (event.get('created') is not True or event.get('deleted') is not False
+                  or os.environ.get('GITHUB_RUN_ATTEMPT') != '1'):
+              raise ValueError('original branch creation attempt required')
+          PY
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Fail-closed local contracts
+        run: python3.12 -m unittest discover -s .github/workflows/scripts -p test_qa3_hosted.py -v
+
+  context:
+    needs: contracts
+    uses: ./.github/workflows/resolve-build-context.yml
+    with:
+      require_run_metadata: true
+
+  runtime:
+    needs: [contracts, context]
+    uses: ./.github/workflows/common-build.yml
+    with:
+      platform: linux
+      arch: x86_64
+      debug: true
+      pgo: false
+      qa3-debug-tests: true
+      MOZ_BUILD_DATE: ${{ needs.context.outputs.expected-build-id }}
