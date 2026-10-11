@@ -122,12 +122,17 @@ jobs:
         run: |
           python3.12 - <<'PY'
           import json, os, sys
+          from pathlib import Path
           sys.path.insert(0, '.github/workflows/scripts')
-          from qa3_hosted import context_from_environment, validate_mode
+          from qa3_hosted import context_from_environment, source_stamp_environment, validate_mode
           validate_mode(os.environ['QA3_PLATFORM'], os.environ['QA3_ARCH'],
                         json.loads(os.environ['QA3_DEBUG']), json.loads(os.environ['QA3_PGO']),
                         os.environ['QA3_PGO_MODE'])
-          context_from_environment(os.environ['QA3_BUILD_ID'])
+          context = context_from_environment(os.environ['QA3_BUILD_ID'])
+          values = source_stamp_environment(Path(os.environ['GITHUB_WORKSPACE']), context)
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              for name, value in values.items():
+                  stream.write(name + '=' + value + '\n')
           PY
           echo 'SCCACHE_GHA_RW_MODE=READ_ONLY' >> "$GITHUB_ENV"
 

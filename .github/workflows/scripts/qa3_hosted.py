@@ -45,7 +45,7 @@ from qa3_source_cohort import file_digest, hash_value, verify_patches
 from runtime_build_context import derive_build_id, fetch_actions_run
 
 REPOSITORY = "Floorp-Projects/Floorp-Runtime"
-BRANCH = "codex/qa3-actions-native-proof-qa337-02"
+BRANCH = "codex/qa3-actions-native-proof-qa337-03"
 WORKFLOW = ".github/workflows/qa3-hosted-linux-debug.yml"
 PROFILE = "github-hosted-debug-to-blacksmith-consumer"
 SEED_SHA = "e084ba7bb4b62a0581266319bfefd7f671bdeb3e39e7f7149de9657cb97a718c"
@@ -204,6 +204,24 @@ def raw_git(source, *args):
         },
         timeout=60,
     )
+
+
+def source_stamp_environment(source, context):
+    validate_context(context)
+    require(
+        raw_git(source, "rev-parse", "HEAD").decode().strip()
+        == context["runtimeRecipe"],
+        "checkout differs from original R",
+    )
+    values = {
+        "MOZ_SOURCE_REPO": "https://github.com/" + REPOSITORY,
+        "MOZ_SOURCE_CHANGESET": context["runtimeRecipe"],
+    }
+    require(
+        all(os.environ.get(name) in (None, value) for name, value in values.items()),
+        "conflicting inherited source identity",
+    )
+    return values
 
 
 def python_inputs(source, runtime, destination):
@@ -457,6 +475,7 @@ def produce(args):
     budget = IOBudget(output, maximum=30 * GIB, minimum_free=20 * GIB)
     expansion = ExpansionBudget()
     env = producer_environment(args.source, args.objdir, context["buildID"])
+    env.update(source_stamp_environment(args.source, context))
     commands = []
 
     def command(name, argv, timeout, **kwargs):

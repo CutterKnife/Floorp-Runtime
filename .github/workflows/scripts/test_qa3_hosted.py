@@ -269,6 +269,177 @@ class HostedEntryBudgets(unittest.TestCase):
         self.probe("consumer", "cumulative")
 
 
+class HostedSourceStamping(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.source = self.root / "source"
+        self.source.mkdir()
+        hosted.raw_git(self.source, "init", "-q", "--initial-branch=qa3")
+        hosted.raw_git(
+            self.source,
+            "-c",
+            "user.name=QA3 fixture",
+            "-c",
+            "user.email=qa3@example.invalid",
+            "commit",
+            "--allow-empty",
+            "--no-gpg-sign",
+            "-q",
+            "-m",
+            "QA3 source fixture",
+        )
+        self.sha = hosted.raw_git(self.source, "rev-parse", "HEAD").decode().strip()
+        self.value = context()
+        self.value.update(controllerHead=self.sha, runtimeRecipe=self.sha)
+        self.event = self.root / "event.json"
+        self.event.write_text(json.dumps({"created": True, "deleted": False}))
+        self.github_env = self.root / "github-env"
+        self.github_env.write_text("EXISTING=value\n")
+        self.environment = {
+            "HOME": str(self.root),
+            "PATH": os.defpath,
+            "GITHUB_WORKSPACE": str(self.source),
+            "GITHUB_REPOSITORY": hosted.REPOSITORY,
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/heads/" + hosted.BRANCH,
+            "GITHUB_SHA": self.sha,
+            "GITHUB_WORKFLOW_SHA": self.sha,
+            "GITHUB_WORKFLOW_REF": hosted.REPOSITORY
+            + "/"
+            + hosted.WORKFLOW
+            + "@refs/heads/"
+            + hosted.BRANCH,
+            "GITHUB_RUN_ID": "10",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_EVENT_PATH": str(self.event),
+            "GITHUB_ENV": str(self.github_env),
+            "QA3_PLATFORM": "linux",
+            "QA3_ARCH": "x86_64",
+            "QA3_DEBUG": "true",
+            "QA3_PGO": "false",
+            "QA3_PGO_MODE": "",
+            "QA3_BUILD_ID": self.value["buildID"],
+        }
+
+    def workflow_entry(self, overrides=None):
+        workflow = (SOURCE / ".github/workflows/common-build.yml").read_text()
+        step = workflow.split("      - name: Validate opt-in Debug test route\n", 1)[1]
+        step = step.split("\n      - name:", 1)[0]
+        code = step.split("python3.12 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+        code = "\n".join(line[10:] for line in code.splitlines())
+        with mock.patch.dict(
+            os.environ, {**self.environment, **(overrides or {})}, clear=True
+        ):
+            exec(
+                compile(code, "common-build:Validate opt-in Debug test route", "exec"),
+                {},
+            )
+
+    def test_workflow_emits_full_verified_checkout_and_canonical_repository(self):
+        self.workflow_entry()
+        self.assertEqual(
+            self.github_env.read_text(),
+            "EXISTING=value\nMOZ_SOURCE_REPO=https://github.com/"
+            + hosted.REPOSITORY
+            + "\nMOZ_SOURCE_CHANGESET="
+            + self.sha
+            + "\n",
+        )
+
+    def test_foreign_checkout_cannot_emit_configure_source_identity(self):
+        with self.assertRaisesRegex(ValueError, "checkout differs from original R"):
+            self.workflow_entry({"GITHUB_SHA": SHA, "GITHUB_WORKFLOW_SHA": SHA})
+        self.assertEqual(self.github_env.read_text(), "EXISTING=value\n")
+
+    def test_conflicting_inherited_stamp_is_rejected_before_environment_write(self):
+        for key, value in (
+            ("MOZ_SOURCE_REPO", "https://example.invalid/foreign"),
+            ("MOZ_SOURCE_CHANGESET", self.sha[:12]),
+        ):
+            with self.subTest(key=key), self.assertRaisesRegex(
+                ValueError, "conflicting inherited source identity"
+            ):
+                self.workflow_entry({key: value})
+            self.assertEqual(self.github_env.read_text(), "EXISTING=value\n")
+
+    def test_matching_inherited_source_identity_is_preserved(self):
+        self.workflow_entry({
+            "MOZ_SOURCE_REPO": "https://github.com/" + hosted.REPOSITORY,
+            "MOZ_SOURCE_CHANGESET": self.sha,
+        })
+        self.assertIn(
+            "MOZ_SOURCE_CHANGESET=" + self.sha + "\n", self.github_env.read_text()
+        )
+
+    def test_producer_command_keeps_source_identity_without_controller_secret(self):
+        class ProbeComplete(Exception):
+            pass
+
+        def command(argv, cwd, env, logs, name, timeout, **kwargs):
+            self.assertEqual(name, "effective-config")
+            self.assertEqual(
+                env["MOZ_SOURCE_REPO"], "https://github.com/" + hosted.REPOSITORY
+            )
+            self.assertEqual(env["MOZ_SOURCE_CHANGESET"], self.sha)
+            self.assertNotIn("GITHUB_TOKEN", env)
+            self.assertEqual(env["MOZ_BUILD_DATE"], self.value["buildID"])
+            raise ProbeComplete
+
+        args = SimpleNamespace(
+            source=self.source,
+            objdir=self.source / "obj",
+            output=self.root / "output",
+            primary=self.root / "primary",
+            build_id=self.value["buildID"],
+        )
+        with mock.patch.dict(
+            os.environ,
+            {**self.environment, "GITHUB_TOKEN": "synthetic-secret"},
+            clear=True,
+        ), mock.patch.object(
+            hosted, "context_from_environment", return_value=self.value
+        ), mock.patch.object(hosted, "host_identity", return_value=HOST), mock.patch(
+            "qa3_native_io.shutil.disk_usage",
+            return_value=SimpleNamespace(free=100 * GIB),
+        ), mock.patch.object(
+            hosted, "run_owned", side_effect=command
+        ), self.assertRaises(ProbeComplete):
+            hosted.produce(args)
+
+    def test_primary_rejects_missing_abbreviated_or_foreign_stamp_in_each_ini(self):
+        app = self.root / "primary" / "floorp"
+        app.mkdir(parents=True)
+
+        def ini(path, section, stamp):
+            text = "[" + section + "]\nBuildID=" + self.value["buildID"] + "\n"
+            if stamp is not None:
+                text += "SourceStamp=" + stamp + "\n"
+            path.write_text(text)
+
+        with mock.patch(
+            "qa3_hosted_support.elf_identity", return_value={"fixture": True}
+        ):
+            for name, section in (
+                ("application.ini", "App"),
+                ("platform.ini", "Build"),
+            ):
+                ini(app / name, section, self.sha)
+            hosted.verify_primary(app.parent, self.value)
+            for name, section in (
+                ("application.ini", "App"),
+                ("platform.ini", "Build"),
+            ):
+                for stamp in (None, self.sha[:12], SHA):
+                    with self.subTest(name=name, stamp=stamp), self.assertRaisesRegex(
+                        ValueError, "packaged source stamp differs from Runtime recipe"
+                    ):
+                        ini(app / name, section, stamp)
+                        hosted.verify_primary(app.parent, self.value)
+                    ini(app / name, section, self.sha)
+
+
 class HostedContracts(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
