@@ -46,7 +46,7 @@ from qa3_source_cohort import file_digest, hash_value, verify_patches
 from runtime_build_context import derive_build_id, fetch_actions_run
 
 REPOSITORY = "Floorp-Projects/Floorp-Runtime"
-BRANCH = "codex/qa3-actions-native-proof-qa337-09"
+BRANCH = "codex/qa3-actions-native-proof-qa337-10"
 WORKFLOW = ".github/workflows/qa3-hosted-linux-debug.yml"
 PROFILE = "github-hosted-debug-to-blacksmith-consumer"
 SEED_SHA = "e084ba7bb4b62a0581266319bfefd7f671bdeb3e39e7f7149de9657cb97a718c"
@@ -262,6 +262,7 @@ def source_stamp_environment(source, context):
     values = {
         "MOZ_SOURCE_REPO": "https://github.com/" + REPOSITORY,
         "MOZ_SOURCE_CHANGESET": context["runtimeRecipe"],
+        "MH_BRANCH": BRANCH,
     }
     require(
         all(os.environ.get(name) in (None, value) for name, value in values.items()),

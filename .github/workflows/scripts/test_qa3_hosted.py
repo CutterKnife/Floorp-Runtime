@@ -354,6 +354,8 @@ class HostedSourceStamping(unittest.TestCase):
             + hosted.REPOSITORY
             + "\nMOZ_SOURCE_CHANGESET="
             + self.sha
+            + "\nMH_BRANCH="
+            + hosted.BRANCH
             + "\nMOZ_AUTOMATION=1\nMOZ_OBJDIR="
             + str(self.source / "obj-x86_64-pc-linux-gnu")
             + "\nUPLOAD_DIR="
@@ -375,6 +377,7 @@ class HostedSourceStamping(unittest.TestCase):
         for key, value in (
             ("MOZ_SOURCE_REPO", "https://example.invalid/foreign"),
             ("MOZ_SOURCE_CHANGESET", self.sha[:12]),
+            ("MH_BRANCH", "foreign-build-tree"),
         ):
             with self.subTest(key=key), self.assertRaisesRegex(
                 ValueError, "conflicting inherited source identity"
@@ -386,10 +389,16 @@ class HostedSourceStamping(unittest.TestCase):
         self.workflow_entry({
             "MOZ_SOURCE_REPO": "https://github.com/" + hosted.REPOSITORY,
             "MOZ_SOURCE_CHANGESET": self.sha,
+            "MH_BRANCH": hosted.BRANCH,
         })
         self.assertIn(
             "MOZ_SOURCE_CHANGESET=" + self.sha + "\n", self.github_env.read_text()
         )
+
+    def test_packaging_tree_identity_is_never_inherited_by_native_child(self):
+        with mock.patch.dict(os.environ, {"MH_BRANCH": hosted.BRANCH}, clear=True):
+            native = hosted.child_environment(self.source)
+        self.assertNotIn("MH_BRANCH", native)
 
     def test_producer_command_keeps_source_identity_without_controller_secret(self):
         class ProbeComplete(Exception):
@@ -401,6 +410,7 @@ class HostedSourceStamping(unittest.TestCase):
                 env["MOZ_SOURCE_REPO"], "https://github.com/" + hosted.REPOSITORY
             )
             self.assertEqual(env["MOZ_SOURCE_CHANGESET"], self.sha)
+            self.assertEqual(env["MH_BRANCH"], hosted.BRANCH)
             self.assertNotIn("GITHUB_TOKEN", env)
             self.assertEqual(env["MOZ_BUILD_DATE"], self.value["buildID"])
             raise ProbeComplete
