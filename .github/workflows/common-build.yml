@@ -198,6 +198,15 @@ jobs:
             SCCACHE_GHA_ENABLED: 'on'
             SCCACHE_MAX_FRAME_LENGTH: '1048576'
 
+      - name: Check scoped Debug packaging Python before build
+        if: inputs.qa3-debug-tests
+        env:
+          QA3_BUILD_ID: ${{ inputs.MOZ_BUILD_DATE }}
+        run: |
+          python3.12 .github/workflows/scripts/qa3_hosted.py preflight \
+            --source "$GITHUB_WORKSPACE" --objdir "$GITHUB_WORKSPACE/obj-x86_64-pc-linux-gnu" \
+            --build-id "$QA3_BUILD_ID" --output "$RUNNER_TEMP/qa3-packaging-preflight"
+
       - name: Build and package
         run: |
           ./.github/workflows/scripts/build-and-package.sh \
@@ -256,6 +265,11 @@ jobs:
             ${{ runner.temp }}/qa3-hosted-producer/logs/*.process.json
             ${{ runner.temp }}/qa3-hosted-producer/logs/effective-config.stdout
             ${{ runner.temp }}/qa3-hosted-producer/logs/package-tests.stdout
+            ${{ runner.temp }}/qa3-packaging-preflight/probe.json
+            ${{ runner.temp }}/qa3-packaging-preflight/preflight.json
+            ${{ runner.temp }}/qa3-packaging-preflight/logs/*.stdout
+            ${{ runner.temp }}/qa3-packaging-preflight/logs/*.stderr
+            ${{ runner.temp }}/qa3-packaging-preflight/logs/*.process.json
           if-no-files-found: error
           retention-days: 1
 

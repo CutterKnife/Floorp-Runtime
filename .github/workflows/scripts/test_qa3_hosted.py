@@ -1246,5 +1246,220 @@ class OriginalConsumerEvidence(unittest.TestCase):
             self.check()
 
 
+class HostedPackagingDependencies(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def test_scrubbed_producer_selects_pip_without_controller_secrets(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "HOME": str(self.root),
+                "MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE": "system",
+                "GITHUB_TOKEN": "private-controller-token",
+                "PIP_REQUIREMENT": "/private/lock",
+                "SCCACHE_GHA_RW_MODE": "READ_WRITE",
+            },
+            clear=True,
+        ):
+            env = hosted.producer_environment(
+                self.root, self.root / "obj", context()["buildID"]
+            )
+            consumer = hosted.child_environment(self.root)
+        self.assertEqual(env["MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE"], "pip")
+        self.assertEqual(env["MOZ_AUTOMATION"], "1")
+        self.assertEqual(env["SCCACHE_GHA_RW_MODE"], "READ_ONLY")
+        for name in ("GITHUB_TOKEN", "PIP_REQUIREMENT"):
+            self.assertNotIn(name, env)
+        self.assertNotIn("MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE", consumer)
+        self.assertNotIn("SCCACHE_GHA_RW_MODE", consumer)
+
+    def material(self):
+        support = self.root / "support"
+        for name in (
+            "modules",
+            "mozbase/fixture",
+            "tools/geckoprocesstypes_generator/geckoprocesstypes",
+        ):
+            (support / name).mkdir(parents=True)
+        (
+            support / "tools/geckoprocesstypes_generator/geckoprocesstypes/__init__.py"
+        ).write_text("process_types = ['fixed-packaged-fixture']\n")
+        return support
+
+    def test_fixed_common_tools_path_imports_in_scrubbed_child(self):
+        import subprocess
+        import sys
+
+        support = self.material()
+        roots = hosted.consumer_module_roots(support)
+        env = hosted.child_environment(
+            self.root, {"PYTHONPATH": ":".join(map(str, roots))}
+        )
+        original = dict(env, PYTHONPATH=":".join(map(str, roots[:-1])))
+        argv = [
+            sys.executable,
+            "-s",
+            "-c",
+            "import geckoprocesstypes; print(geckoprocesstypes.process_types)",
+        ]
+        before = subprocess.run(
+            argv,
+            cwd=self.root,
+            env=original,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+        after = subprocess.run(
+            argv, cwd=self.root, env=env, capture_output=True, timeout=20, check=False
+        )
+        self.assertEqual(before.returncode, 1)
+        self.assertIn(b"ModuleNotFoundError", before.stderr)
+        self.assertEqual(after.returncode, 0, after.stderr)
+        self.assertEqual(after.stdout, b"['fixed-packaged-fixture']\n")
+
+    def test_missing_or_linked_common_tools_module_is_rejected(self):
+        support = self.material()
+        module = (
+            support / "tools/geckoprocesstypes_generator/geckoprocesstypes/__init__.py"
+        )
+        original = module.read_bytes()
+        module.unlink()
+        with self.assertRaises(ValueError):
+            hosted.consumer_module_roots(support)
+        outside = self.root / "outside.py"
+        outside.write_bytes(original)
+        module.symlink_to(outside)
+        with self.assertRaises(ValueError):
+            hosted.consumer_module_roots(support)
+
+    def test_actual_nonzero_process_retains_failure_and_safe_typed_diagnostics(self):
+        import contextlib
+        import sys
+
+        logs = self.root / "logs"
+        logs.mkdir()
+        env = hosted.child_environment(self.root)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(ValueError):
+            hosted.run_diagnosed(
+                [
+                    sys.executable,
+                    "-c",
+                    "print('::error::private-token-value'); raise ModuleNotFoundError(\"No module named 'qa3_missing_fixture'\")",
+                ],
+                self.root,
+                env,
+                logs,
+                "diagnostic-fixture",
+                20,
+                memory=GIB,
+                log_limit=1024**2,
+            )
+        value = json.loads(output.getvalue())
+        self.assertEqual(value["exit"], 1)
+        self.assertTrue(value["ownedCleanupComplete"])
+        self.assertNotIn("private-token-value", output.getvalue())
+        self.assertNotIn("::error::", output.getvalue())
+        stderr = next(v for v in value["boundedTypedTails"] if v["stream"] == "stderr")
+        self.assertEqual(stderr["missingModules"], ["qa3_missing_fixture"])
+        self.assertEqual(stderr["exceptionClasses"], ["ModuleNotFoundError"])
+        self.assertIn(
+            b"private-token-value", (logs / "diagnostic-fixture.stdout").read_bytes()
+        )
+        self.assertEqual(read_json(logs / "diagnostic-fixture.process.json")["exit"], 1)
+
+    def test_diagnostic_output_failure_does_not_replace_original_process_failure(self):
+        import sys
+
+        logs = self.root / "logs"
+        logs.mkdir()
+        env = hosted.child_environment(self.root)
+        with mock.patch.object(
+            hosted, "emit_owned_failure", side_effect=BrokenPipeError
+        ), mock.patch("builtins.print", side_effect=BrokenPipeError):
+            with self.assertRaisesRegex(
+                ValueError, "diagnostic-broken-output failed: NONZERO_EXIT"
+            ):
+                hosted.run_diagnosed(
+                    [sys.executable, "-c", "raise SystemExit(7)"],
+                    self.root,
+                    env,
+                    logs,
+                    "diagnostic-broken-output",
+                    20,
+                    memory=GIB,
+                    log_limit=1024**2,
+                )
+        self.assertEqual(
+            read_json(logs / "diagnostic-broken-output.process.json")["exit"], 7
+        )
+
+    def test_data_stdout_is_never_inspected_as_text_diagnostics(self):
+        import contextlib
+
+        logs = self.root / "logs"
+        logs.mkdir()
+        write_json(
+            logs / "decode-fixture.process.json",
+            {
+                "name": "decode-fixture",
+                "exit": 1,
+                "stop": None,
+                "stdoutIsData": True,
+                "ownedCleanupComplete": True,
+            },
+        )
+        (logs / "decode-fixture.stdout").write_bytes(
+            b"No module named 'binary_data_must_not_be_read'"
+        )
+        (logs / "decode-fixture.stderr").write_bytes(
+            b"ModuleNotFoundError: No module named 'stderr_fixture'\n"
+        )
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            hosted.emit_owned_failure(logs, "decode-fixture")
+        value = json.loads(output.getvalue())
+        self.assertEqual([v["stream"] for v in value["boundedTypedTails"]], ["stderr"])
+        self.assertNotIn("binary_data_must_not_be_read", output.getvalue())
+
+    def test_preflight_is_scoped_before_build_with_original_diagnostics(self):
+        import yaml
+
+        workflow = yaml.safe_load(
+            (SOURCE / ".github/workflows/common-build.yml").read_text()
+        )
+        steps = workflow["jobs"]["build"]["steps"]
+        name = "Check scoped Debug packaging Python before build"
+        preflight = next(v for v in steps if v.get("name") == name)
+        self.assertEqual(preflight["if"], "inputs.qa3-debug-tests")
+        self.assertLess(
+            next(
+                i
+                for i, v in enumerate(steps)
+                if v.get("name") == "Setup floorp configuration"
+            ),
+            steps.index(preflight),
+        )
+        self.assertLess(
+            steps.index(preflight),
+            next(
+                i for i, v in enumerate(steps) if v.get("name") == "Build and package"
+            ),
+        )
+        diagnostics = next(
+            v
+            for v in steps
+            if v.get("name") == "Preserve original Debug packaging diagnostics"
+        )
+        self.assertIn(
+            "qa3-packaging-preflight/logs/*.process.json", diagnostics["with"]["path"]
+        )
+        self.assertEqual(diagnostics["with"]["retention-days"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

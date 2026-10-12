@@ -5,6 +5,7 @@
 
 import argparse
 import hashlib
+import json
 import os
 import platform
 import re
@@ -45,7 +46,7 @@ from qa3_source_cohort import file_digest, hash_value, verify_patches
 from runtime_build_context import derive_build_id, fetch_actions_run
 
 REPOSITORY = "Floorp-Projects/Floorp-Runtime"
-BRANCH = "codex/qa3-actions-native-proof-qa337-03"
+BRANCH = "codex/qa3-actions-native-proof-qa337-04"
 WORKFLOW = ".github/workflows/qa3-hosted-linux-debug.yml"
 PROFILE = "github-hosted-debug-to-blacksmith-consumer"
 SEED_SHA = "e084ba7bb4b62a0581266319bfefd7f671bdeb3e39e7f7149de9657cb97a718c"
@@ -404,6 +405,10 @@ def verify_support(support, value):
             "xpcom/tests/unit/head_xpcom.js",
             "xpcshell/tests/xpcom/tests/unit/head_xpcom.js",
         ),
+        (
+            "xpcom/geckoprocesstypes_generator/geckoprocesstypes/__init__.py",
+            "tools/geckoprocesstypes_generator/geckoprocesstypes/__init__.py",
+        ),
     ):
         require(
             file_digest(support / archive) == source_hashes[source],
@@ -427,7 +432,160 @@ def producer_environment(source, objdir, build_id):
     env["MOZBUILD_STATE_PATH"] = os.environ.get(
         "MOZBUILD_STATE_PATH", str(Path(env["HOME"]) / ".mozbuild")
     )
+    env["MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE"] = "pip"
+    env["SCCACHE_GHA_RW_MODE"] = "READ_ONLY"
     return env
+
+
+def emit_owned_failure(logs, name, *, data_stdout=False):
+    require(re.fullmatch(r"[a-z0-9-]{1,80}", name), "invalid diagnostic phase")
+    value = {"schema": "qa3-owned-failure-diagnostic-v1", "phase": name}
+    receipt = logs / (name + ".process.json")
+    if (
+        receipt.is_file()
+        and not receipt.is_symlink()
+        and receipt.stat().st_size <= 65536
+    ):
+        process = read_json(receipt)
+        exit_code = process.get("exit")
+        stop = process.get("stop")
+        value.update(
+            exit=exit_code if type(exit_code) is int else None,
+            stop=stop
+            if isinstance(stop, str) and re.fullmatch(r"[A-Z_]{1,80}", stop)
+            else None,
+            ownedCleanupComplete=process.get("ownedCleanupComplete") is True,
+        )
+        data_stdout = data_stdout or process.get("stdoutIsData") is True
+    tails = []
+    for kind in ("stderr", "stdout"):
+        if kind == "stdout" and data_stdout:
+            continue
+        path = logs / (name + "." + kind)
+        if not path.is_file() or path.is_symlink():
+            continue
+        with path.open("rb") as stream:
+            stream.seek(max(0, path.stat().st_size - 16384))
+            raw = stream.read(16384)
+        text = raw.decode("utf-8", errors="replace")
+        tails.append({
+            "stream": kind,
+            "originalBytes": path.stat().st_size,
+            "inspectedTailBytes": len(raw),
+            "tailSha256": hashlib.sha256(raw).hexdigest(),
+            "exceptionClasses": sorted(
+                set(re.findall(r"\b([A-Za-z_]\w*(?:Error|Exception))\b", text))
+            )[:8],
+            "missingModules": sorted(
+                set(
+                    re.findall(
+                        r"No module named ['\"]([A-Za-z0-9_.]{1,120})['\"]", text
+                    )
+                )
+            )[:8],
+            "makeExitCodes": sorted(
+                set(map(int, re.findall(r"\*\*\* .* Error ([0-9]{1,3})\b", text)))
+            )[:8],
+        })
+    value["boundedTypedTails"] = tails
+    print(json.dumps(value, sort_keys=True), flush=True)
+
+
+def run_diagnosed(argv, cwd, env, logs, name, timeout, **kwargs):
+    try:
+        return run_owned(argv, cwd, env, logs, name, timeout, **kwargs)
+    except BaseException:
+        try:
+            emit_owned_failure(
+                logs, name, data_stdout=kwargs.get("data_stdout") is True
+            )
+        except BaseException:
+            try:
+                print(
+                    json.dumps({
+                        "schema": "qa3-owned-failure-diagnostic-v1",
+                        "phase": name,
+                        "diagnosticUnavailable": True,
+                    }),
+                    flush=True,
+                )
+            except BaseException:
+                pass
+        raise
+
+
+def packaging_preflight(args):
+    context = context_from_environment(args.build_id)
+    env = producer_environment(args.source, args.objdir, context["buildID"])
+    env.update(source_stamp_environment(args.source, context))
+    output = fresh(args.output)
+    logs = fresh(output / "logs")
+    result = run_diagnosed(
+        [
+            "/usr/bin/python3.12",
+            str(args.source / "mach"),
+            "python",
+            "--virtualenv",
+            "build",
+            str(Path(__file__).parent / "qa3_packaging_probe.py"),
+            "--source",
+            str(args.source),
+            "--output",
+            str(output / "probe.json"),
+        ],
+        args.source,
+        env,
+        logs,
+        "packaging-python-preflight",
+        180,
+        log_limit=16 * 1024**2,
+    )
+    probe = read_json(output / "probe.json")
+    require(
+        probe.get("verdict") == "PASS_SOURCE_ARCHIVE_ONLY",
+        "packaging Python preflight failed",
+    )
+    write_json(
+        output / "preflight.json",
+        {
+            "context": context,
+            "probe": probe,
+            "process": result,
+            "publicationAuthorized": False,
+        },
+    )
+    print(
+        json.dumps(
+            {
+                "schema": "qa3-packaging-preflight-v1",
+                "context": context,
+                "probe": probe,
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+
+
+def consumer_module_roots(support):
+    process_types = support / "tools/geckoprocesstypes_generator"
+    require(
+        process_types.is_dir()
+        and not process_types.is_symlink()
+        and (process_types / "geckoprocesstypes/__init__.py").is_file()
+        and not (process_types / "geckoprocesstypes/__init__.py").is_symlink(),
+        "missing packaged Gecko process-type module",
+    )
+    modules = [
+        support / "modules",
+        support,
+        *sorted((support / "mozbase").iterdir()),
+        process_types,
+    ]
+    require(
+        all(p.is_dir() and not p.is_symlink() for p in modules), "missing mozbase roots"
+    )
+    return modules
 
 
 def artifact_storage_budget(primary, output):
@@ -479,7 +637,7 @@ def produce(args):
     commands = []
 
     def command(name, argv, timeout, **kwargs):
-        result = run_owned(
+        result = run_diagnosed(
             argv,
             args.source,
             env,
@@ -818,7 +976,7 @@ def consume(inputs, state, recipe, context):
     commands = []
 
     def command(name, argv, timeout, **kw):
-        result = run_owned(
+        result = run_diagnosed(
             argv,
             state,
             env,
@@ -871,8 +1029,7 @@ def consume(inputs, state, recipe, context):
         180,
     )
     command("pip-check", [python, "-I", "-m", "pip", "check"], 60)
-    modules = [support / "modules", support, *sorted((support / "mozbase").iterdir())]
-    require(all(p.is_dir() for p in modules), "missing mozbase roots")
+    modules = consumer_module_roots(support)
     env.update(
         PYTHONPATH=":".join(map(str, modules)),
         MOZ_HEADLESS="1",
@@ -1006,7 +1163,9 @@ def verify_consumer(output, support, producer, context):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=("produce", "acquire", "worker"))
+    parser.add_argument(
+        "operation", choices=("preflight", "produce", "acquire", "worker")
+    )
     for name in (
         "source",
         "objdir",
@@ -1022,7 +1181,9 @@ def main():
     parser.add_argument("--artifact-id", type=int)
     parser.add_argument("--artifact-sha256")
     args = parser.parse_args()
-    if args.operation == "produce":
+    if args.operation == "preflight":
+        packaging_preflight(args)
+    elif args.operation == "produce":
         try:
             produce(args)
         except BaseException as exc:

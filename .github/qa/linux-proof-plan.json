@@ -63,6 +63,10 @@
     {
       "path": ".github/qa/canaries/test_qa3_assertion.js",
       "sha256": "67951468a7b25d0cdbfc8f722cff0f3ec81eca7280d4496571039943f19cd495"
+    },
+    {
+      "path": "xpcom/geckoprocesstypes_generator/geckoprocesstypes/__init__.py",
+      "sha256": "cff1552b15589f162be4af7adf46bb2a58526ac268740ec8debddb53bbeae6f2"
     }
   ],
   "selection": [
