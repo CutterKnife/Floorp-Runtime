@@ -14,7 +14,7 @@ class TestTestInstallManifest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             result = exercise_test_install(Path(temporary))
         self.assertGreater(result["fixtureManifestEntries"], 100)
-        self.assertEqual(result["expandedFiles"], 3)
+        self.assertEqual(result["expandedFiles"], 4)
         for name, value in result.items():
             if isinstance(value, bool):
                 self.assertTrue(value, name)
@@ -24,6 +24,41 @@ class TestTestInstallManifest(unittest.TestCase):
             result = exercise_test_install(Path(temporary), nested_objdir=True)
         self.assertTrue(result["repeatInstallPreservesSource"])
         self.assertTrue(result["obsoleteExpandedLinksPreserveSource"])
+
+    def test_conflicting_pattern_alias_refused_without_write(self):
+        from mozpack.manifests import InstallManifest
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, objdir, path, _ = _fixture(root)
+            different = source / "different"
+            different.mkdir()
+            (different / "parent-one.txt").write_bytes(b"conflicting content")
+            manifest = InstallManifest(path=str(path))
+            manifest.add_pattern_link(
+                str(different), "*.txt", "another/../shared"
+            )
+            manifest.write(path=str(path))
+            before = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "conflicting.*alias"):
+                prepare_test_install(source, objdir, root / "receipt.json")
+            self.assertEqual(path.read_bytes(), before)
+            self.assertFalse((root / "receipt.json").exists())
+
+    def test_escaping_pattern_output_refused_without_write(self):
+        from mozpack.manifests import InstallManifest
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, objdir, path, _ = _fixture(root)
+            manifest = InstallManifest(path=str(path))
+            manifest.add_pattern_copy(str(source / "pattern-copy"), "*.txt", "..")
+            manifest.write(path=str(path))
+            before = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "type='File', key="):
+                prepare_test_install(source, objdir, root / "receipt.json")
+            self.assertEqual(path.read_bytes(), before)
+            self.assertFalse((root / "receipt.json").exists())
 
     def test_external_directory_refused_without_write(self):
         from mozpack.manifests import InstallManifest

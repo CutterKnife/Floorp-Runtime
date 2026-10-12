@@ -22,17 +22,42 @@ def _digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def _destination(path):
-    value = PurePosixPath(path)
+def _destination(path, entry_type):
+    import mozpack.path as mozpath
+
+    value = mozpath.normpath(path)
     if (
         not path
-        or value.is_absolute()
+        or PurePosixPath(value).is_absolute()
         or "\\" in path
-        or str(value) != path
-        or ".." in value.parts
+        or any(ord(character) < 32 for character in path)
+        or value in {".", ".."}
+        or value.startswith("../")
     ):
-        raise ValueError("test install destination escapes its manifest root")
-    return path
+        raise ValueError(
+            "test install destination escapes its manifest root: "
+            f"type={entry_type!r}, key={path[:256]!r}"
+        )
+    return value
+
+
+def _same_installed_file(first, second):
+    from mozpack.files import AbsoluteSymlinkFile, File, HardlinkFile
+
+    if type(first) is not type(second) or type(first) not in {
+        AbsoluteSymlinkFile,
+        File,
+        HardlinkFile,
+    }:
+        return False
+    try:
+        return (
+            Path(first.path).resolve(strict=True)
+            == Path(second.path).resolve(strict=True)
+            and first.mode == second.mode
+        )
+    except (OSError, RuntimeError):
+        return False
 
 
 def _output_path(output, source):
@@ -87,10 +112,10 @@ def prepare_test_install(source, objdir, output):
     tree_entries = 0
     replacement = InstallManifest()
     for destination, entry in sorted(manifest._dests.items()):
-        _destination(destination)
         if entry[0] != InstallManifest.LINK or not Path(entry[1]).is_dir():
             replacement._add_entry(destination, entry)
             continue
+        directory_destination = _destination(destination, entry[0])
         original = Path(entry[1])
         directory = original.resolve(strict=True)
         if not original.is_absolute() or not directory.is_relative_to(source):
@@ -117,7 +142,7 @@ def prepare_test_install(source, objdir, output):
                 raise ValueError(
                     "test support file escapes source or is not regular"
                 )
-            dest = _destination(destination + "/" + relative)
+            dest = _destination(directory_destination + "/" + relative, entry[0])
             replacement.add_link(str(target), dest)
             files.append({
                 "source": target.relative_to(source).as_posix(),
@@ -127,11 +152,24 @@ def prepare_test_install(source, objdir, output):
             raise ValueError("test support directory has no installable files")
         directories.append({
             "source": directory.relative_to(source).as_posix(),
-            "destination": destination,
+            "destination": directory_destination,
             "files": files,
         })
     registry = FileRegistry()
     replacement.populate_registry(registry)
+    checked = FileRegistry()
+    outputs = {}
+    for destination, file in registry:
+        canonical = _destination(destination, type(file).__name__)
+        if canonical in outputs:
+            if _same_installed_file(outputs[canonical], file):
+                continue
+            raise ValueError(
+                "conflicting test install output alias: "
+                f"type={type(file).__name__!r}, key={destination[:256]!r}"
+            )
+        checked.add(canonical, file)
+        outputs[canonical] = file
     value = io.StringIO()
     replacement.write(fileobj=value)
     after = value.getvalue().encode("utf-8") if directories else before
@@ -182,12 +220,33 @@ def _fixture(root, nested_objdir=False):
     for relative, data in payloads.items():
         (resources / relative).write_bytes(data)
     (source / "unrelated.js").write_bytes(b"qa3-unrelated\n")
+    for directory, name, data in (
+        ("trailing-resources", "sentinel.txt", b"qa3-trailing-directory\n"),
+        ("pattern-link", "link-one.txt", b"qa3-pattern-link\n"),
+        ("pattern-copy", "copy-one.txt", b"qa3-pattern-copy\n"),
+        ("shared", "parent-one.txt", b"qa3-parent-pattern\n"),
+        ("root-pattern", "root-one.txt", b"qa3-empty-destination-pattern\n"),
+    ):
+        (source / directory).mkdir()
+        (source / directory / name).write_bytes(data)
     objdir = (source if nested_objdir else root) / "objdir"
     manifest_path = objdir / "_build_manifests/install/_test_files"
     manifest_path.parent.mkdir(parents=True)
     manifest = InstallManifest()
     manifest.add_link(str(resources), "browser/resources")
+    manifest.add_link(str(source / "trailing-resources"), "trailing/resources/")
     manifest.add_link(str(source / "unrelated.js"), "unrelated.js")
+    manifest.add_pattern_link(
+        str(source / "pattern-link"), "/link-*.txt", "pattern-linked"
+    )
+    manifest.add_pattern_copy(
+        str(source / "pattern-copy"), "/copy-*.txt", "pattern-copied"
+    )
+    manifest.add_pattern_link(
+        str(source / "pattern-link"), "../shared/*.txt", "pattern-parent"
+    )
+    manifest.add_pattern_link(str(source / "shared"), "*.txt", "shared")
+    manifest.add_pattern_link(str(source / "root-pattern"), "*.txt", "")
     for i in range(101):
         manifest.add_content("filler", "filler/" + str(i))
     manifest.write(path=str(manifest_path))
@@ -200,12 +259,28 @@ def exercise_test_install(root, nested_objdir=False):
 
     root = Path(root)
     source, objdir, manifest_path, payloads = _fixture(root, nested_objdir)
+    original = InstallManifest(path=str(manifest_path))
+    patterns = {
+        key: entry
+        for key, entry in original._dests.items()
+        if entry[0] in {InstallManifest.PATTERN_LINK, InstallManifest.PATTERN_COPY}
+    }
     dest = objdir / "_tests"
     track = objdir / "track"
     process_manifest(str(dest), [str(manifest_path)], str(track))
     if not (dest / "browser/resources").is_symlink():
         raise ValueError("fixture did not exercise the direct directory symlink")
     normalized = prepare_test_install(source, objdir, root / "normalization.json")
+    prepared = InstallManifest(path=str(manifest_path))
+    if any(prepared._dests.get(key) != entry for key, entry in patterns.items()):
+        raise ValueError("normalization changed untouched pattern metadata")
+    extras = (
+        ("trailing-resources/sentinel.txt", "trailing/resources/sentinel.txt"),
+        ("pattern-link/link-one.txt", "pattern-linked/link-one.txt"),
+        ("pattern-copy/copy-one.txt", "pattern-copied/copy-one.txt"),
+        ("shared/parent-one.txt", "shared/parent-one.txt"),
+        ("root-pattern/root-one.txt", "root-one.txt"),
+    )
     for _ in range(2):
         process_manifest(str(dest), [str(manifest_path)], str(track))
         if (dest / "browser/resources").is_symlink():
@@ -218,6 +293,11 @@ def exercise_test_install(root, nested_objdir=False):
             ):
                 raise ValueError(
                     "repeated install changed source or installed contents"
+                )
+        for relative, installed in extras:
+            if (dest / installed).read_bytes() != (source / relative).read_bytes():
+                raise ValueError(
+                    "repeated pattern or trailing-directory install differs"
                 )
     unchanged = prepare_test_install(source, objdir, root / "unchanged.json")
     if (
@@ -274,6 +354,9 @@ def exercise_test_install(root, nested_objdir=False):
         "obsoleteExpandedLinksPreserveSource": True,
         "normalizationIdempotent": True,
         "collisionRefusedWithoutWrite": True,
+        "trailingDirectoryDestination": True,
+        "patternMetadataPreserved": True,
+        "parentGlobAliasesPreserved": True,
     }
 
 
