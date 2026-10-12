@@ -1477,6 +1477,29 @@ class HostedMozbaseArchiveShape(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.support = HostedPackagingDependencies.material(self)
 
+    def test_contract_checkout_covers_exact_pinned_archive_shape_sources(self):
+        import yaml
+
+        workflow = yaml.safe_load(
+            (SOURCE / ".github/workflows/qa3-hosted-linux-debug.yml").read_text()
+        )
+        checkout = next(
+            step["with"]
+            for step in workflow["jobs"]["contracts"]["steps"]
+            if step.get("uses") == "actions/checkout@v4"
+        )
+        self.assertIs(checkout["sparse-checkout-cone-mode"], False)
+        source_hashes = {
+            row["path"]: row["sha256"]
+            for row in read_json(self.support / "plan.json")["sourceMaterials"]
+        }
+        metadata = {"testing/mozbase/moz.build", "testing/mozbase/setup_development.py"}
+        self.assertTrue(metadata <= source_hashes.keys())
+        self.assertEqual(
+            set(checkout["sparse-checkout"].splitlines()),
+            {"/.github/**", *("/" + name for name in metadata)},
+        )
+
     def test_registered_roots_match_source_and_packaged_metadata_is_not_a_root(self):
         build = ast.parse((SOURCE / "testing/mozbase/moz.build").read_bytes())
         registered = next(
