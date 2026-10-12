@@ -93,8 +93,12 @@ def probe(source, output):
         stream.write(compressed)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from qa3_test_install import probe_test_install
+    from qa3_archive_probe import probe_archive_members
 
     test_install = probe_test_install(source, output.parent / "test-install-probe.json")
+    archive_members = probe_archive_members(
+        source, output.parent / "archive-member-probe.json"
+    )
     value = {
         "schema": "qa3-packaging-python-probe-v1",
         "verdict": "PASS_SOURCE_ARCHIVE_ONLY",
@@ -117,6 +121,7 @@ def probe(source, output):
         "probeArchiveBytes": len(compressed),
         "probeTarSha256": hashlib.sha256(decoded).hexdigest(),
         "testInstallProbe": test_install,
+        "archiveMemberProbe": archive_members,
     }
     with output.open("x") as stream:
         stream.write(json.dumps(value, indent=2) + "\n")

@@ -8,6 +8,7 @@ import errno
 import json
 import math
 import os
+import posixpath
 import select
 import selectors
 import shutil
@@ -906,10 +907,26 @@ def elf_identity(path):
     return {"sha256": file_digest(path), "gnuBuildID": ids[0], "machine": "x86_64"}
 
 
-def _archive_name(value):
-    while value.startswith("./"):
-        value = value[2:]
-    return safe_path(value.rstrip("/"))
+def _archive_name(value, normalize_member_paths=False):
+    original = value
+    try:
+        if normalize_member_paths:
+            if (
+                "\\" in value
+                or any(ord(character) < 32 for character in value)
+                or PurePosixPath(value).is_absolute()
+            ):
+                raise ValueError("invalid test archive path")
+            value = posixpath.normpath(value)
+            if value == ".":
+                raise ValueError("test archive member resolves to root")
+        else:
+            while value.startswith("./"):
+                value = value[2:]
+        return safe_path(value.rstrip("/"))
+    except ValueError as exc:
+        label = repr(original[:256])[:256]
+        raise ValueError(f"{exc}: archive member={label}") from exc
 
 
 def extract_archive(
@@ -919,6 +936,7 @@ def extract_archive(
     max_files=MAX_FILES,
     budget=None,
     expansion=None,
+    normalize_member_paths=False,
 ):
     fresh(destination)
     names = set()
@@ -927,9 +945,14 @@ def extract_archive(
 
     def target(name, size):
         nonlocal total
-        name = _archive_name(name)
+        original = name
+        name = _archive_name(name, normalize_member_paths)
         if name in names or len(names) >= max_files or size < 0:
-            raise ValueError("duplicate or excessive archive member")
+            raise ValueError(
+                "duplicate or excessive archive member: "
+                f"member={repr(original[:256])[:256]}, "
+                f"canonical={repr(name[:256])[:256]}"
+            )
         names.add(name)
         if expansion is not None:
             expansion.claim(size)

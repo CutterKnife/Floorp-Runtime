@@ -106,6 +106,122 @@ class NativeIOTests(unittest.TestCase):
                     self.tar(entries, str(i) + ".tar.gz"), self.root / str(i)
                 )
 
+    def test_actual_mozilla_archive_preserves_normalized_bytes_and_modes(self):
+        source = Path(__file__).resolve().parents[3]
+        modules = [
+            str(source / "python/mozbuild"),
+            str(source / "third_party/python/packaging"),
+            *sys.path,
+        ]
+        with mock.patch.object(sys, "path", modules):
+            from mozpack.archive import create_tar_from_files
+            from mozpack.files import GeneratedFile
+
+        class FixtureFile(GeneratedFile):
+            @property
+            def mode(self):
+                return 0o755
+
+        fixtures = (
+            ("mozbase//mozinfo/module.py", "mozbase/mozinfo/module.py"),
+            ("mochitest/browser/./browser.toml", "mochitest/browser/browser.toml"),
+            ("xpcshell/tests/unit/../shared.js", "xpcshell/tests/shared.js"),
+        )
+        for index, (original, canonical) in enumerate(fixtures):
+            packed = self.root / f"mozilla-{index}.tar"
+            payload = (original + "\n").encode()
+            with packed.open("xb") as stream:
+                create_tar_from_files(stream, {original: FixtureFile(payload)})
+            with tarfile.open(packed, "r:") as reader:
+                self.assertEqual(reader.getnames(), [original])
+            with self.subTest(original=original):
+                with self.assertRaisesRegex(ValueError, "noncanonical source path"):
+                    extract_archive(packed, self.root / f"strict-{index}")
+                destination = self.root / f"normalized-{index}"
+                result = extract_archive(
+                    packed, destination, normalize_member_paths=True
+                )
+                self.assertEqual(result["members"], 1)
+                self.assertEqual(result["expandedBytes"], len(payload))
+                self.assertEqual((destination / canonical).read_bytes(), payload)
+                if os.name == "posix":
+                    self.assertEqual(
+                        (destination / canonical).stat().st_mode & 0o777, 0o755
+                    )
+
+    def test_normalized_archive_rejects_escapes_root_and_original_invalid_names(self):
+        for index, name in enumerate((
+            "/absolute",
+            "//absolute",
+            "../outside",
+            "parent/../../outside",
+            "parent//../../outside",
+            "parent/./../../outside",
+            "parent/\\outside",
+            "parent/\noutside",
+            ".",
+            "parent/..",
+        )):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                extract_archive(
+                    self.tar([(name, b"bad", "file")], f"escape-{index}.tar.gz"),
+                    self.root / f"escape-{index}",
+                    normalize_member_paths=True,
+                )
+        self.assertFalse((self.root / "outside").exists())
+
+    def test_normalized_archive_rejects_duplicate_canonical_aliases(self):
+        for index, (first, second) in enumerate((
+            ("a/b", "a//b"),
+            ("a/b", "a/./b"),
+            ("b", "a/../b"),
+        )):
+            destination = self.root / f"duplicate-{index}"
+            with self.subTest(second=second), self.assertRaisesRegex(
+                ValueError, "duplicate or excessive archive member"
+            ):
+                extract_archive(
+                    self.tar(
+                        [(first, b"first", "file"), (second, b"second", "file")],
+                        f"duplicate-{index}.tar.gz",
+                    ),
+                    destination,
+                    normalize_member_paths=True,
+                )
+            self.assertEqual((destination / first).read_bytes(), b"first")
+
+    def test_normalized_archive_cannot_write_through_pending_symlink_parent(self):
+        packed = self.tar([
+            ("alias", "payload", "symlink"),
+            ("parent/../alias/child", b"bad", "file"),
+            ("payload", b"original", "file"),
+        ])
+        with self.assertRaisesRegex(ValueError, "writes through symlink"):
+            extract_archive(
+                packed, self.root / "symlink-parent", normalize_member_paths=True
+            )
+
+    def test_normalized_archive_still_rejects_special_and_external_link_materials(self):
+        for index, (content, kind) in enumerate((
+            ("target", "hardlink"),
+            ("", "device"),
+            ("../outside", "symlink"),
+            ("absent", "symlink"),
+        )):
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                extract_archive(
+                    self.tar([("a", content, kind)], f"special-{index}.tar.gz"),
+                    self.root / f"special-{index}",
+                    normalize_member_paths=True,
+                )
+
+    def test_archive_path_error_has_bounded_original_member(self):
+        for name in ("x" * 4096 + "\noutside", "\x01" * 4096):
+            with self.subTest(name=name[:10]), self.assertRaises(ValueError) as caught:
+                qa3_native_io._archive_name(name, normalize_member_paths=True)
+            self.assertIn("archive member=", str(caught.exception))
+            self.assertLess(len(str(caught.exception)), 512)
+
     def test_archive_special_hardlink_and_external_symlink(self):
         for i, entries in enumerate((
             [("a", "target", "hardlink")],

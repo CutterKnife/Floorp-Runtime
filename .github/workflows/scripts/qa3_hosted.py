@@ -47,7 +47,7 @@ from qa3_source_cohort import file_digest, hash_value, verify_patches
 from runtime_build_context import derive_build_id, fetch_actions_run
 
 REPOSITORY = "Floorp-Projects/Floorp-Runtime"
-BRANCH = "codex/qa3-actions-native-proof-qa337-12"
+BRANCH = "codex/qa3-actions-native-proof-qa337-13"
 WORKFLOW = ".github/workflows/qa3-hosted-linux-debug.yml"
 PROFILE = "github-hosted-debug-to-blacksmith-consumer"
 SEED_SHA = "e084ba7bb4b62a0581266319bfefd7f671bdeb3e39e7f7149de9657cb97a718c"
@@ -1060,7 +1060,13 @@ def produce(args):
         )
         archive = logs / ("decode-" + kind + ".stdout")
         stage = output / ("archive-" + kind)
-        extract_archive(archive, stage, budget=budget, expansion=expansion)
+        extract_archive(
+            archive,
+            stage,
+            budget=budget,
+            expansion=expansion,
+            normalize_member_paths=True,
+        )
         merge_materials(stage, support, budget)
         budget.release_tree(stage)
         if archive.parent == logs:
