@@ -124,12 +124,12 @@ jobs:
           import json, os, sys
           from pathlib import Path
           sys.path.insert(0, '.github/workflows/scripts')
-          from qa3_hosted import context_from_environment, source_stamp_environment, validate_mode
+          from qa3_hosted import build_environment, context_from_environment, validate_mode
           validate_mode(os.environ['QA3_PLATFORM'], os.environ['QA3_ARCH'],
                         json.loads(os.environ['QA3_DEBUG']), json.loads(os.environ['QA3_PGO']),
                         os.environ['QA3_PGO_MODE'])
           context = context_from_environment(os.environ['QA3_BUILD_ID'])
-          values = source_stamp_environment(Path(os.environ['GITHUB_WORKSPACE']), context)
+          values = build_environment(Path(os.environ['GITHUB_WORKSPACE']), context)
           with open(os.environ['GITHUB_ENV'], 'a') as stream:
               for name, value in values.items():
                   stream.write(name + '=' + value + '\n')
@@ -204,6 +204,9 @@ jobs:
         env:
           QA3_BUILD_ID: ${{ inputs.MOZ_BUILD_DATE }}
         run: |
+          python3.12 .github/workflows/scripts/qa3_build_profile.py \
+            --config mozconfig --platform linux --arch x86_64 \
+            --debug true --pgo false --hosted-test-support
           python3.12 .github/workflows/scripts/qa3_hosted.py preflight \
             --source "$GITHUB_WORKSPACE" --objdir "$GITHUB_WORKSPACE/obj-x86_64-pc-linux-gnu" \
             --build-id "$QA3_BUILD_ID" --output "$RUNNER_TEMP/qa3-packaging-preflight"
@@ -261,10 +264,12 @@ jobs:
           path: |
             ${{ runner.temp }}/qa3-hosted-producer/failure.json
             ${{ runner.temp }}/qa3-hosted-producer/effective-config.json
+            ${{ runner.temp }}/qa3-hosted-producer/effective-config-after-tests.json
             ${{ runner.temp }}/qa3-hosted-producer/producer.json
             ${{ runner.temp }}/qa3-hosted-producer/logs/*.stderr
             ${{ runner.temp }}/qa3-hosted-producer/logs/*.process.json
             ${{ runner.temp }}/qa3-hosted-producer/logs/effective-config.stdout
+            ${{ runner.temp }}/qa3-hosted-producer/logs/effective-after-tests.stdout
             ${{ runner.temp }}/qa3-hosted-producer/logs/package-tests.stdout
             ${{ runner.temp }}/qa3-packaging-preflight/probe.json
             ${{ runner.temp }}/qa3-packaging-preflight/preflight.json

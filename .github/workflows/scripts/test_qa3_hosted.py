@@ -17,6 +17,7 @@ from unittest import mock
 
 import qa3_hosted as hosted
 import qa3_hosted_boundary as boundary
+from qa3_build_profile import ac_options, enable_hosted_test_support, profile
 from qa3_mozlog import verify_mozlog
 from qa3_native_io import GIB, IOBudget, extract_archive, read_json, write_json
 from qa3_native_transport import verify_artifact_metadata
@@ -89,6 +90,10 @@ def effective():
         "substs": {
             "ENABLE_TESTS": True,
             "MOZ_DEBUG": True,
+            "MOZ_AUTOMATION": True,
+            "COMPILE_ENVIRONMENT": True,
+            "JS_DISABLE_SHELL": None,
+            "LINK_GTEST_DURING_COMPILE": True,
             "MOZ_ARTIFACT_BUILDS": False,
             "MOZ_PROFILE_GENERATE": False,
             "MOZ_PROFILE_USE": False,
@@ -116,6 +121,7 @@ def producer():
         "host": HOST,
         "objdir": "/source/obj",
         "effectiveConfig": effective(),
+        "effectiveConfigAfterTests": effective(),
         "runtimeUpstream": pin,
         "sourcePolicy": read_json(SOURCE / ".github/qa/source-policy.json"),
         "compiledSource": {
@@ -133,6 +139,7 @@ def producer():
             for n in (
                 "effective-config",
                 "package-tests",
+                "effective-after-tests",
                 "decode-common",
                 "decode-mochitest",
                 "decode-xpcshell",
@@ -140,6 +147,7 @@ def producer():
         ],
         "primaryIdentity": identities,
         "compiledIdentity": copy.deepcopy(identities),
+        "compiledIdentityAfterTests": copy.deepcopy(identities),
         **{
             n: DIGEST
             for n in (
@@ -345,7 +353,12 @@ class HostedSourceStamping(unittest.TestCase):
             + hosted.REPOSITORY
             + "\nMOZ_SOURCE_CHANGESET="
             + self.sha
-            + "\n",
+            + "\nMOZ_AUTOMATION=1\nMOZ_OBJDIR="
+            + str(self.source / "obj-x86_64-pc-linux-gnu")
+            + "\nMACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE=pip\n"
+            + "".join(
+                "MOZ_AUTOMATION_" + name + "=0\n" for name in hosted.AUTOMATION_PHASES
+            ),
         )
 
     def test_foreign_checkout_cannot_emit_configure_source_identity(self):
@@ -1252,6 +1265,119 @@ class HostedPackagingDependencies(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
+    def test_generated_hosted_config_enables_all_observed_stage_prerequisites(self):
+        expected = profile("linux", "x86_64", True, False)
+        original = (
+            "ac_add_options --target=x86_64-pc-linux-gnu\n"
+            "ac_add_options --enable-debug\nac_add_options --enable-tests\n"
+            "export MOZ_PACKAGE_JSSHELL=1\n"
+        )
+        result = enable_hosted_test_support(original, expected)
+        self.assertNotIn("--enable-js-shell", ac_options(original))
+        self.assertEqual(ac_options(result).count("--enable-js-shell"), 1)
+        self.assertEqual(ac_options(result).count("--enable-gtest-in-build"), 1)
+        self.assertEqual(enable_hosted_test_support(result, expected), result)
+        for name in ("js-shell", "gtest-in-build"):
+            for suffix in (
+                "ac_add_options --disable-" + name + "\n",
+                "ac_add_options --enable-" + name + "=unknown\n",
+            ):
+                with self.subTest(name=name, suffix=suffix), self.assertRaises(
+                    ValueError
+                ):
+                    enable_hosted_test_support(original + suffix, expected)
+
+    def test_hosted_support_cannot_change_production_pgo_or_foreign_target(self):
+        for args in (
+            ("linux", "x86_64", False, False),
+            ("linux", "aarch64", True, False),
+            ("windows", "x86_64", True, False),
+            ("mac", "aarch64", True, False),
+            ("linux", "x86_64", False, True, "generate", ""),
+            ("linux", "x86_64", False, True, "use", "profile"),
+        ):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                enable_hosted_test_support("unchanged\n", profile(*args))
+
+    def test_packaging_cannot_change_configuration_or_compiled_primary_bytes(self):
+        before = effective()
+        identities = producer()["compiledIdentity"]
+        source, objdir = Path("/source"), Path("/source/obj")
+        hosted.verify_packaged_build_cohort(
+            before,
+            copy.deepcopy(before),
+            identities,
+            copy.deepcopy(identities),
+            source,
+            objdir,
+        )
+        after = copy.deepcopy(before)
+        after["substs"]["CXX"] = ["/foreign/compiler"]
+        with self.assertRaisesRegex(ValueError, "test packaging changed"):
+            hosted.verify_packaged_build_cohort(
+                before, after, identities, identities, source, objdir
+            )
+        changed = copy.deepcopy(identities)
+        changed["libxul.so"]["sha256"] = "e" * 64
+        with self.assertRaisesRegex(ValueError, "test packaging changed"):
+            hosted.verify_packaged_build_cohort(
+                before, before, identities, changed, source, objdir
+            )
+
+    def test_consumer_requires_original_successful_post_packaging_cohort(self):
+        with mock.patch.object(
+            hosted, "host_identity", return_value=HOST
+        ), mock.patch.object(hosted, "worker_boot_identity", return_value="d" * 64):
+            hosted.validate_producer(producer(), context())
+            for key in ("effectiveConfigAfterTests", "compiledIdentityAfterTests"):
+                changed = producer()
+                del changed[key]
+                with self.subTest(key=key), self.assertRaises(ValueError):
+                    hosted.validate_producer(changed, context())
+            for modification in ("missing", "failed", "repeated"):
+                changed = producer()
+                commands = changed["commands"]
+                index = next(
+                    i
+                    for i, item in enumerate(commands)
+                    if item["name"] == "effective-after-tests"
+                )
+                if modification == "missing":
+                    del commands[index]
+                elif modification == "failed":
+                    commands[index]["exit"] = 1
+                else:
+                    commands.insert(index, copy.deepcopy(commands[index]))
+                with self.subTest(modification=modification), self.assertRaises(
+                    ValueError
+                ):
+                    hosted.validate_producer(changed, context())
+
+    def test_effective_staging_config_rejects_missing_or_disabled_prerequisites(self):
+        source, objdir = Path("/source"), Path("/source/obj")
+        hosted.validate_effective(effective(), source, objdir)
+        for name in (
+            "MOZ_AUTOMATION",
+            "COMPILE_ENVIRONMENT",
+            "LINK_GTEST_DURING_COMPILE",
+        ):
+            for value in (None, False, "0"):
+                changed = effective()
+                changed["substs"][name] = value
+                with self.subTest(name=name, value=value), self.assertRaises(
+                    ValueError
+                ):
+                    hosted.validate_effective(changed, source, objdir)
+        for value in (True, 1, "1", "unknown"):
+            changed = effective()
+            changed["substs"]["JS_DISABLE_SHELL"] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                hosted.validate_effective(changed, source, objdir)
+        missing = effective()
+        del missing["substs"]["JS_DISABLE_SHELL"]
+        with self.assertRaises(ValueError):
+            hosted.validate_effective(missing, source, objdir)
+
     def test_scrubbed_producer_selects_pip_without_controller_secrets(self):
         with mock.patch.dict(
             os.environ,
@@ -1458,6 +1584,11 @@ class HostedPackagingDependencies(unittest.TestCase):
             next(
                 i for i, v in enumerate(steps) if v.get("name") == "Build and package"
             ),
+        )
+        self.assertIn("--hosted-test-support", preflight["run"])
+        self.assertLess(
+            preflight["run"].index("qa3_build_profile.py"),
+            preflight["run"].index("qa3_hosted.py preflight"),
         )
         diagnostics = next(
             v

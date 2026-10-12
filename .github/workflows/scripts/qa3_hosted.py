@@ -46,13 +46,22 @@ from qa3_source_cohort import file_digest, hash_value, verify_patches
 from runtime_build_context import derive_build_id, fetch_actions_run
 
 REPOSITORY = "Floorp-Projects/Floorp-Runtime"
-BRANCH = "codex/qa3-actions-native-proof-qa337-06"
+BRANCH = "codex/qa3-actions-native-proof-qa337-07"
 WORKFLOW = ".github/workflows/qa3-hosted-linux-debug.yml"
 PROFILE = "github-hosted-debug-to-blacksmith-consumer"
 SEED_SHA = "e084ba7bb4b62a0581266319bfefd7f671bdeb3e39e7f7149de9657cb97a718c"
 MAX_TRANSFER = 20 * GIB
 MAX_ARTIFACT_STORAGE = 40 * GIB
 WRAPPER_FILES = {"runtime.tar.xz", "test-support.tar.gz", "producer.json"}
+AUTOMATION_PHASES = (
+    "BUILD_SYMBOLS",
+    "PACKAGE",
+    "PACKAGE_TESTS",
+    "PACKAGE_GENERATED_SOURCES",
+    "UPLOAD_SYMBOLS",
+    "UPLOAD",
+    "CHECK",
+)
 MOZBASE_MODULES = (
     "manifestparser",
     "mozcrash",
@@ -190,12 +199,23 @@ def validate_effective(value, source, objdir):
         "effective source/OBJDIR differs from existing build",
     )
     substs = value["substs"]
-    for name in ("ENABLE_TESTS", "MOZ_DEBUG"):
+    for name in (
+        "ENABLE_TESTS",
+        "MOZ_DEBUG",
+        "MOZ_AUTOMATION",
+        "COMPILE_ENVIRONMENT",
+        "LINK_GTEST_DURING_COMPILE",
+    ):
         require(
             type(substs.get(name)) in {bool, int, str}
             and substs[name] in (True, 1, "1"),
-            "effective Debug/tests missing",
+            "effective Debug/test staging prerequisites missing",
         )
+    require(
+        "JS_DISABLE_SHELL" in substs
+        and substs["JS_DISABLE_SHELL"] in (None, False, 0, "", "0"),
+        "effective JS shell disabled or unknown",
+    )
     for name in ("MOZ_ARTIFACT_BUILDS", "MOZ_PROFILE_GENERATE", "MOZ_PROFILE_USE"):
         require(substs.get(name) in (None, False, 0, "", "0"), "artifact/PGO build")
     require(
@@ -451,6 +471,17 @@ def verify_support(support, value):
     return plan
 
 
+def build_environment(source, context):
+    values = source_stamp_environment(source, context)
+    values.update(
+        MOZ_AUTOMATION="1",
+        MOZ_OBJDIR=str(source.resolve() / "obj-x86_64-pc-linux-gnu"),
+        MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE="pip",
+    )
+    values.update({"MOZ_AUTOMATION_" + name: "0" for name in AUTOMATION_PHASES})
+    return values
+
+
 def producer_environment(source, objdir, build_id):
     env = child_environment(
         source, {"MOZ_BUILD_DATE": build_id, "MOZ_OBJDIR": str(objdir.resolve())}
@@ -700,6 +731,17 @@ def artifact_storage_budget(primary, output):
     }
 
 
+def verify_packaged_build_cohort(
+    before, after, primary_before, primary_after, source, objdir
+):
+    validate_effective(before, source, objdir)
+    validate_effective(after, source, objdir)
+    require(
+        before == after and primary_before == primary_after,
+        "test packaging changed effective configuration or compiled primary",
+    )
+
+
 def produce(args):
     context = context_from_environment(args.build_id)
     require(
@@ -787,6 +829,40 @@ def produce(args):
         ],
         1800,
     )
+    effective_after = output / "effective-config-after-tests.json"
+    command(
+        "effective-after-tests",
+        [
+            "/usr/bin/python3.12",
+            str(args.source / "mach"),
+            "python",
+            "--virtualenv",
+            "build",
+            str(Path(__file__).parent / "qa3_config_probe.py"),
+            "--source",
+            str(args.source),
+            "--objdir",
+            str(args.objdir),
+            "--output",
+            str(effective_after),
+        ],
+        120,
+    )
+    effective_after_value = read_json(effective_after)
+    compiled_after = verify_primary(
+        args.objdir / "dist",
+        context,
+        app=args.objdir / "dist/bin",
+        object_root=args.objdir,
+    )
+    verify_packaged_build_cohort(
+        effective_value,
+        effective_after_value,
+        compiled_identity,
+        compiled_after,
+        args.source,
+        args.objdir,
+    )
     support = fresh(output / "support-expanded")
     archives = []
     for kind in ("common", "mochitest", "xpcshell"):
@@ -858,6 +934,7 @@ def produce(args):
         "host": host,
         "objdir": str(args.objdir.resolve()),
         "effectiveConfig": effective_value,
+        "effectiveConfigAfterTests": effective_after_value,
         "runtimeUpstream": upstream,
         "sourcePolicy": policy,
         "actualSourceDeltaSha256": hashlib.sha256(changes).hexdigest(),
@@ -867,6 +944,7 @@ def produce(args):
         "primarySha256": file_digest(primary),
         "primaryIdentity": identity,
         "compiledIdentity": compiled_identity,
+        "compiledIdentityAfterTests": compiled_after,
         "supportSha256": support_sha,
         "supportInventory": capture_material_tree(support),
         "pythonEnvironmentSha256": python_sha,
@@ -922,6 +1000,11 @@ def validate_producer(value, context):
     effective = value["effectiveConfig"]
     validate_effective(effective, Path(effective["source"]), Path(value["objdir"]))
     require(
+        value.get("effectiveConfigAfterTests") == effective
+        and value.get("compiledIdentityAfterTests") == value["compiledIdentity"],
+        "missing or changed post-packaging configure/build cohort",
+    )
+    require(
         [r["kind"] for r in value["archives"]] == ["common", "mochitest", "xpcshell"],
         "missing original test archives",
     )
@@ -954,6 +1037,7 @@ def validate_producer(value, context):
         == [
             "effective-config",
             "package-tests",
+            "effective-after-tests",
             "decode-common",
             "decode-mochitest",
             "decode-xpcshell",

@@ -25,6 +25,10 @@ def main():
     names = (
         "ENABLE_TESTS",
         "MOZ_DEBUG",
+        "MOZ_AUTOMATION",
+        "COMPILE_ENVIRONMENT",
+        "JS_DISABLE_SHELL",
+        "LINK_GTEST_DURING_COMPILE",
         "MOZ_ARTIFACT_BUILDS",
         "MOZ_PROFILE_GENERATE",
         "MOZ_PROFILE_USE",
