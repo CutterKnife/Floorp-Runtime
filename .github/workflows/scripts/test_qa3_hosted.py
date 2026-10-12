@@ -356,6 +356,8 @@ class HostedSourceStamping(unittest.TestCase):
             + self.sha
             + "\nMOZ_AUTOMATION=1\nMOZ_OBJDIR="
             + str(self.source / "obj-x86_64-pc-linux-gnu")
+            + "\nUPLOAD_DIR="
+            + str(self.source / "obj-x86_64-pc-linux-gnu" / "qa3-artifact-metrics")
             + "\nMACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE=pip\n"
             + "TASKCLUSTER_ROOT_URL=https://firefox-ci-tc.services.mozilla.com\n"
             + "MOZ_SCM_LEVEL=3\n"
@@ -1629,6 +1631,24 @@ class HostedBootstrapPrerequisites(unittest.TestCase):
             "nativeExecuted": False,
             "publicationAuthorized": False,
         }
+
+    def test_build_and_packaging_share_local_metrics_without_native_inheritance(self):
+        source = self.root / "source"
+        source.mkdir()
+        objdir = source / "obj-x86_64-pc-linux-gnu"
+        with mock.patch.dict(os.environ, {"UPLOAD_DIR": "/controller/private"}):
+            with mock.patch("qa3_hosted.source_stamp_environment", return_value={}):
+                initial = hosted.build_environment(source, {})
+                packaged = hosted.producer_environment(source, objdir, "20261012000000")
+                native = hosted.child_environment(source)
+        self.assertEqual(initial["UPLOAD_DIR"], packaged["UPLOAD_DIR"])
+        self.assertTrue(Path(packaged["UPLOAD_DIR"]).is_absolute())
+        self.assertTrue(Path(packaged["UPLOAD_DIR"]).is_relative_to(objdir))
+        self.assertNotEqual(packaged["UPLOAD_DIR"], "/controller/private")
+        self.assertNotIn("UPLOAD_DIR", native)
+        self.assertEqual(initial["MOZ_AUTOMATION"], "1")
+        for name in hosted.AUTOMATION_PHASES:
+            self.assertEqual(initial["MOZ_AUTOMATION_" + name], "0")
 
     def test_only_metadata_child_omits_automation_and_controller_secrets(self):
         with mock.patch.dict(

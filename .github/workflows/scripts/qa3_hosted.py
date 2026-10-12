@@ -46,7 +46,7 @@ from qa3_source_cohort import file_digest, hash_value, verify_patches
 from runtime_build_context import derive_build_id, fetch_actions_run
 
 REPOSITORY = "Floorp-Projects/Floorp-Runtime"
-BRANCH = "codex/qa3-actions-native-proof-qa337-08"
+BRANCH = "codex/qa3-actions-native-proof-qa337-09"
 WORKFLOW = ".github/workflows/qa3-hosted-linux-debug.yml"
 PROFILE = "github-hosted-debug-to-blacksmith-consumer"
 SEED_SHA = "e084ba7bb4b62a0581266319bfefd7f671bdeb3e39e7f7149de9657cb97a718c"
@@ -480,6 +480,9 @@ def build_environment(source, context):
     values.update(
         MOZ_AUTOMATION="1",
         MOZ_OBJDIR=str(source.resolve() / "obj-x86_64-pc-linux-gnu"),
+        UPLOAD_DIR=str(
+            source.resolve() / "obj-x86_64-pc-linux-gnu" / "qa3-artifact-metrics"
+        ),
         MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE="pip",
         TASKCLUSTER_ROOT_URL="https://firefox-ci-tc.services.mozilla.com",
         MOZ_SCM_LEVEL="3",
@@ -499,6 +502,7 @@ def producer_environment(source, objdir, build_id):
     env["SCCACHE_GHA_RW_MODE"] = "READ_ONLY"
     env["TASKCLUSTER_ROOT_URL"] = "https://firefox-ci-tc.services.mozilla.com"
     env["MOZ_SCM_LEVEL"] = "3"
+    env["UPLOAD_DIR"] = str(objdir.resolve() / "qa3-artifact-metrics")
     return env
 
 
