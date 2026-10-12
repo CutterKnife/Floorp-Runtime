@@ -123,6 +123,18 @@ def producer():
         "objdir": "/source/obj",
         "effectiveConfig": effective(),
         "effectiveConfigAfterTests": effective(),
+        "sourceDeltaBeforeTestsSha256": DIGEST,
+        "testInstallManifest": {
+            "schema": "qa3-test-install-manifest-v1",
+            "verdict": "PASS_GENERATED_MANIFEST_NORMALIZATION",
+            "nativeExecuted": False,
+            "manifest": "/source/obj/_build_manifests/install/_test_files",
+            "beforeSha256": "a" * 64,
+            "afterSha256": "b" * 64,
+            "expandedDirectoryCount": 1,
+            "expandedFileCount": 1,
+            "expandedDirectories": [{}],
+        },
         "runtimeUpstream": pin,
         "sourcePolicy": read_json(SOURCE / ".github/qa/source-policy.json"),
         "compiledSource": {
@@ -139,6 +151,7 @@ def producer():
             {"name": n, "exit": 0, "stop": None, "ownedCleanupComplete": True}
             for n in (
                 "effective-config",
+                "prepare-test-install",
                 "package-tests",
                 "effective-after-tests",
                 "decode-common",
@@ -1149,6 +1162,11 @@ class OriginalConsumerEvidence(unittest.TestCase):
                     },
                     {"action": "suite_end"},
                 ]
+                if canary and case["suite"] == "xpcshell":
+                    events[2].update(
+                        subtest="run_test",
+                        message="[run_test : 4] QA3_EXPECTED_ASSERTION - false == true",
+                    )
             (self.root / "logs" / (name + ".stdout")).write_text(
                 "".join(json.dumps(e) + "\n" for e in events)
             )
@@ -1275,6 +1293,33 @@ class OriginalConsumerEvidence(unittest.TestCase):
 
 
 class HostedPackagingDependencies(unittest.TestCase):
+    def test_consumer_requires_successful_original_test_install_preparation(self):
+        with mock.patch.object(
+            hosted, "host_identity", return_value=HOST
+        ), mock.patch.object(hosted, "worker_boot_identity", return_value="d" * 64):
+            hosted.validate_producer(producer(), context())
+            for change in (
+                "missing-record",
+                "unchanged",
+                "missing-command",
+                "failed",
+                "source-delta",
+            ):
+                value = producer()
+                record = value["testInstallManifest"]
+                if change == "missing-record":
+                    del value["testInstallManifest"]
+                elif change == "unchanged":
+                    record["afterSha256"] = record["beforeSha256"]
+                elif change == "missing-command":
+                    del value["commands"][1]
+                elif change == "source-delta":
+                    value["actualSourceDeltaSha256"] = "e" * 64
+                else:
+                    value["commands"][1]["exit"] = 1
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    hosted.validate_producer(value, context())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

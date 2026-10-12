@@ -6,7 +6,14 @@ import re
 import shutil
 from pathlib import Path
 
-from qa3_native_io import GIB, capture_material_tree, copy_file, elf_identity, read_json
+from qa3_native_io import (
+    GIB,
+    capture_material_tree,
+    copy_file,
+    elf_identity,
+    fresh,
+    read_json,
+)
 from qa3_source_cohort import file_digest, hash_value
 
 
@@ -132,11 +139,31 @@ def verify_python_environment(root, expected_digest):
     return snapshot
 
 
-def harness_argv(python, support, app, case, profile):
-    manifest = (
-        support / case["archivePath"].rsplit("/", 1)[0] / Path(case["manifest"]).name
-    )
+def stage_mochitest(support, destination, budget):
+    source = support / "mochitest"
+    inventory = capture_material_tree(source)
+    if not inventory["entries"] or any(
+        item["type"] != "file" for item in inventory["entries"]
+    ):
+        raise ValueError("mutable mochitest copy requires regular packaged files")
+    if destination.resolve().is_relative_to(support.resolve()):
+        raise ValueError("mutable mochitest copy must be outside frozen support")
+    destination = fresh(destination)
+    merge_materials(source, destination, budget)
+    if (
+        capture_material_tree(source) != inventory
+        or capture_material_tree(destination) != inventory
+    ):
+        raise ValueError("mutable mochitest copy differs from frozen support")
+    return destination
+
+
+def harness_argv(python, support, app, case, profile, *, mochitest_root=None):
     test = support / case["archivePath"]
+    if case["suite"] == "browser-chrome":
+        mochitest_root = mochitest_root or support / "mochitest"
+        test = mochitest_root / Path(case["archivePath"]).relative_to("mochitest")
+    manifest = test.parent / Path(case["manifest"]).name
     common = [
         "--manifest",
         str(manifest),
@@ -153,13 +180,15 @@ def harness_argv(python, support, app, case, profile):
         return [
             python,
             "-s",
-            str(support / "mochitest/runtests.py"),
+            str(mochitest_root / "runtests.py"),
             "--flavor",
             "browser",
             "--appname",
             str(app / "floorp"),
             "--certificate-path",
             str(support / "certs"),
+            "--extra-profile-file",
+            str(support / "bin/plugins"),
             "--headless",
             "--timeout",
             "120",
@@ -178,6 +207,7 @@ def harness_argv(python, support, app, case, profile):
             "--app-path",
             str(app),
             "--sequential",
+            "--verbose",
             "--no-logfiles",
             *common,
             str(test),

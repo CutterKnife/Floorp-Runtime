@@ -271,7 +271,9 @@ jobs:
             ${{ runner.temp }}/qa3-hosted-producer/logs/effective-config.stdout
             ${{ runner.temp }}/qa3-hosted-producer/logs/effective-after-tests.stdout
             ${{ runner.temp }}/qa3-hosted-producer/logs/package-tests.stdout
+            ${{ runner.temp }}/qa3-hosted-producer/test-install-manifest.json
             ${{ runner.temp }}/qa3-packaging-preflight/probe.json
+            ${{ runner.temp }}/qa3-packaging-preflight/test-install-probe.json
             ${{ runner.temp }}/qa3-packaging-preflight/preflight.json
             ${{ runner.temp }}/qa3-packaging-preflight/bootstrap-*.json
             ${{ runner.temp }}/qa3-packaging-preflight/logs/*.stdout

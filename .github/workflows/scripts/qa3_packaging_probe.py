@@ -91,6 +91,10 @@ def probe(source, output):
                 raise ValueError("actual Mozilla tar.zst writer roundtrip differs")
     with (output.parent / "probe-fixture.tar.zst").open("xb") as stream:
         stream.write(compressed)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from qa3_test_install import probe_test_install
+
+    test_install = probe_test_install(source, output.parent / "test-install-probe.json")
     value = {
         "schema": "qa3-packaging-python-probe-v1",
         "verdict": "PASS_SOURCE_ARCHIVE_ONLY",
@@ -112,6 +116,7 @@ def probe(source, output):
         "probeArchiveSha256": hashlib.sha256(compressed).hexdigest(),
         "probeArchiveBytes": len(compressed),
         "probeTarSha256": hashlib.sha256(decoded).hexdigest(),
+        "testInstallProbe": test_install,
     }
     with output.open("x") as stream:
         stream.write(json.dumps(value, indent=2) + "\n")

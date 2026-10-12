@@ -168,7 +168,7 @@ class MozlogContracts(unittest.TestCase):
 
     def test_canonical_package_id_and_browser_chrome_uri(self):
         for suite, test in (
-            ("xpcshell", str(self.root / "xpcshell/tests/xpcom/test.js")),
+            ("xpcshell", str((self.root / "xpcshell/tests").resolve()) + "/xpcom/test.js"),
             ("browser-chrome", "chrome://mochitests/content/browser/xpcom/test.js"),
         ):
             self.case["suite"] = suite
@@ -272,10 +272,92 @@ class MozlogContracts(unittest.TestCase):
     def test_exact_expected_assertion_canary(self):
         events = copy.deepcopy(self.events)
         events[2].update(
-            status="FAIL", expected="PASS", subtest="QA3_EXPECTED_ASSERTION"
+            status="FAIL",
+            expected="PASS",
+            subtest="run_test",
+            message="[run_test : 4] QA3_EXPECTED_ASSERTION - false == true",
         )
         result = self.verify(events, canary=True, process={**self.process, "exit": 1})
         self.assertEqual(result["verdict"], "EXPECTED_REJECTION")
+
+    def test_browser_canary_uses_assertion_subtest(self):
+        self.case["suite"] = "browser-chrome"
+        for reason in ("QA3_EXPECTED_ASSERTION", "QA3_EXPECTED_ASSERTION - false"):
+            events = copy.deepcopy(self.events)
+            events[2].update(status="FAIL", expected="PASS", subtest=reason)
+            with self.subTest(reason=reason):
+                self.assertEqual(
+                    self.verify(
+                        events, canary=True, process={**self.process, "exit": 1}
+                    )["verdict"],
+                    "EXPECTED_REJECTION",
+                )
+
+    def test_xpcshell_canary_requires_frozen_function_and_assertion_message(self):
+        assertion = {
+            "status": "FAIL",
+            "expected": "PASS",
+            "subtest": "run_test",
+            "message": "[run_test : 4] QA3_EXPECTED_ASSERTION - false == true",
+        }
+        for changes in (
+            {"subtest": "QA3_EXPECTED_ASSERTION"},
+            {"subtest": "other_test"},
+            {"subtest": None},
+            {"message": None},
+            {"message": True},
+            {"message": "QA3_EXPECTED_ASSERTION"},
+            {"message": "[run_test : 4] unrelated assertion - false == true"},
+            {"message": "[other_test : 4] QA3_EXPECTED_ASSERTION - false == true"},
+            {"message": "[run_test : 0] QA3_EXPECTED_ASSERTION - false == true"},
+            {"message": "[run_test : 4] QA3_EXPECTED_ASSERTION - 0 == true"},
+            {"message": "[run_test : 4] QA3_EXPECTED_ASSERTION - false == true\n"},
+        ):
+            events = copy.deepcopy(self.events)
+            events[2].update({**assertion, **changes})
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.verify(events, canary=True, process={**self.process, "exit": 1})
+
+    def test_xpcshell_failure_summary_preserves_fail_closed_canary_validation(self):
+        events = copy.deepcopy(self.events)
+        events[2].update(
+            status="FAIL",
+            expected="PASS",
+            subtest="run_test",
+            message="[run_test : 4] QA3_EXPECTED_ASSERTION - false == true",
+        )
+        summary = [
+            {"action": "log", "level": "INFO", "message": message}
+            for message in (
+                "INFO | Result summary:",
+                "INFO | Passed: 0",
+                "INFO | Failed: 1",
+                "INFO | Todo: 0",
+                "INFO | Retried: 0",
+            )
+        ]
+        self.assertEqual(
+            self.verify(
+                [*events[:-1], *summary, events[-1]],
+                canary=True,
+                process={**self.process, "exit": 1},
+            )["verdict"],
+            "EXPECTED_REJECTION",
+        )
+        for extra in (
+            {"action": "log", "level": "ERROR", "message": "QA3_EXPECTED_ASSERTION"},
+            {"action": "log", "level": "INFO", "message": "TEST-UNEXPECTED-FAIL"},
+            {"action": "log", "level": "INFO", "message": "will retry"},
+            {"action": "crash"},
+            {"action": "mozleak_total", "bytes": 1},
+            {"action": "process_exit", "exitcode": 1},
+        ):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                self.verify(
+                    [*events[:-1], extra, events[-1]],
+                    canary=True,
+                    process={**self.process, "exit": 1},
+                )
 
     def test_unexecuted_setup_failure_is_not_expected_canary(self):
         for reason in ("unrelated assertion", "not QA3_EXPECTED_ASSERTION", None):
@@ -291,7 +373,10 @@ class MozlogContracts(unittest.TestCase):
     def test_canary_cannot_accept_zero_exit_crash_or_two_expected_failures(self):
         events = copy.deepcopy(self.events)
         events[2].update(
-            status="FAIL", expected="PASS", subtest="QA3_EXPECTED_ASSERTION"
+            status="FAIL",
+            expected="PASS",
+            subtest="run_test",
+            message="[run_test : 4] QA3_EXPECTED_ASSERTION - false == true",
         )
         for process in (self.process, {**self.process, "exit": -11}):
             with self.assertRaises(ValueError):
@@ -303,7 +388,10 @@ class MozlogContracts(unittest.TestCase):
     def test_canary_rejects_expected_fail_skip_retry_exit_and_untyped_assertions(self):
         events = copy.deepcopy(self.events)
         events[2].update(
-            status="FAIL", expected="PASS", subtest="QA3_EXPECTED_ASSERTION"
+            status="FAIL",
+            expected="PASS",
+            subtest="run_test",
+            message="[run_test : 4] QA3_EXPECTED_ASSERTION - false == true",
         )
         for expected in ("FAIL", "SKIP", None):
             changed = copy.deepcopy(events)

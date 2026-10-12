@@ -23,6 +23,7 @@ from qa3_hosted_support import (
     harness_argv,
     install_canaries,
     merge_materials,
+    stage_mochitest,
     verify_primary,
     verify_python_environment,
 )
@@ -46,7 +47,7 @@ from qa3_source_cohort import file_digest, hash_value, verify_patches
 from runtime_build_context import derive_build_id, fetch_actions_run
 
 REPOSITORY = "Floorp-Projects/Floorp-Runtime"
-BRANCH = "codex/qa3-actions-native-proof-qa337-10"
+BRANCH = "codex/qa3-actions-native-proof-qa337-11"
 WORKFLOW = ".github/workflows/qa3-hosted-linux-debug.yml"
 PROFILE = "github-hosted-debug-to-blacksmith-consumer"
 SEED_SHA = "e084ba7bb4b62a0581266319bfefd7f671bdeb3e39e7f7149de9657cb97a718c"
@@ -418,6 +419,14 @@ def verify_support(support, value):
     verify_python_environment(
         support / "python-environment", value["pythonEnvironmentSha256"]
     )
+    for name in ("gmp-fake", "gmp-fakeopenh264"):
+        plugin = support / "bin/plugins" / name / "1.0"
+        require(
+            plugin.is_dir()
+            and not plugin.is_symlink()
+            and any(path.is_file() for path in plugin.iterdir()),
+            "same-build GMP test plugin is missing",
+        )
     require(file_digest(support / "plan.json") == value["planSha256"], "plan changed")
     plan = read_json(support / "plan.json")
     require(
@@ -857,6 +866,28 @@ def verify_packaged_build_cohort(
     )
 
 
+def verify_test_install(value, objdir):
+    require(
+        value.get("schema") == "qa3-test-install-manifest-v1"
+        and value.get("verdict") == "PASS_GENERATED_MANIFEST_NORMALIZATION"
+        and value.get("nativeExecuted") is False
+        and value.get("manifest")
+        == str(objdir / "_build_manifests/install/_test_files")
+        and type(value.get("expandedDirectoryCount")) is int
+        and type(value.get("expandedFileCount")) is int
+        and 0 <= value["expandedDirectoryCount"] <= value["expandedFileCount"]
+        and value["expandedDirectoryCount"] == len(value.get("expandedDirectories", [])),
+        "missing generated test-manifest normalization evidence",
+    )
+    hash_value(value["beforeSha256"])
+    hash_value(value["afterSha256"])
+    require(
+        value["expandedDirectoryCount"] == 0
+        or value["beforeSha256"] != value["afterSha256"],
+        "directory test links were not normalized",
+    )
+
+
 def produce(args):
     context = context_from_environment(args.build_id)
     require(
@@ -931,6 +962,32 @@ def produce(args):
         ),
         "packaged primary differs from same OBJDIR build",
     )
+    test_install = output / "test-install-manifest.json"
+    source_before_tests = hashlib.sha256(
+        raw_git(
+            args.source, "diff", "--binary", "HEAD", "--", ".", ":(exclude).github"
+        )
+    ).hexdigest()
+    command(
+        "prepare-test-install",
+        [
+            "/usr/bin/python3.12",
+            str(args.source / "mach"),
+            "python",
+            "--virtualenv",
+            "build",
+            str(Path(__file__).parent / "qa3_test_install.py"),
+            "--source",
+            str(args.source),
+            "--objdir",
+            str(args.objdir),
+            "--output",
+            str(test_install),
+        ],
+        120,
+    )
+    test_install_value = read_json(test_install)
+    verify_test_install(test_install_value, args.objdir.resolve())
     command(
         "package-tests",
         [
@@ -1041,6 +1098,11 @@ def produce(args):
     changes = raw_git(
         args.source, "diff", "--binary", "HEAD", "--", ".", ":(exclude).github"
     )
+    source_after_tests = hashlib.sha256(changes).hexdigest()
+    require(
+        source_before_tests == source_after_tests,
+        "test packaging changed the compiled source tree",
+    )
     receipt = {
         "schema": "qa3-hosted-debug-producer-v1",
         "status": "PACKAGED_NOT_CONSUMED",
@@ -1050,9 +1112,11 @@ def produce(args):
         "objdir": str(args.objdir.resolve()),
         "effectiveConfig": effective_value,
         "effectiveConfigAfterTests": effective_after_value,
+        "testInstallManifest": test_install_value,
         "runtimeUpstream": upstream,
         "sourcePolicy": policy,
-        "actualSourceDeltaSha256": hashlib.sha256(changes).hexdigest(),
+        "actualSourceDeltaSha256": source_after_tests,
+        "sourceDeltaBeforeTestsSha256": source_before_tests,
         "compiledSource": source_record,
         "archives": archives,
         "commands": commands,
@@ -1114,6 +1178,11 @@ def validate_producer(value, context):
     )
     effective = value["effectiveConfig"]
     validate_effective(effective, Path(effective["source"]), Path(value["objdir"]))
+    verify_test_install(value.get("testInstallManifest", {}), Path(value["objdir"]))
+    require(
+        value.get("sourceDeltaBeforeTestsSha256") == value["actualSourceDeltaSha256"],
+        "missing or changed compiled source after test packaging",
+    )
     require(
         value.get("effectiveConfigAfterTests") == effective
         and value.get("compiledIdentityAfterTests") == value["compiledIdentity"],
@@ -1151,6 +1220,7 @@ def validate_producer(value, context):
         and [c["name"] for c in value["commands"]]
         == [
             "effective-config",
+            "prepare-test-install",
             "package-tests",
             "effective-after-tests",
             "decode-common",
@@ -1326,11 +1396,24 @@ def consume(inputs, state, recipe, context):
         for canary in (False, True):
             selected = canary_case(case, support, value) if canary else case
             name = f"native-{index}-{'assertion-canary' if canary else 'required'}"
+            mochitest_root = None
+            copied_bytes = 0
+            if selected["suite"] == "browser-chrome":
+                before_copy = budget.used
+                mochitest_root = stage_mochitest(
+                    support, state / (name + "-harness") / "mochitest", budget
+                )
+                copied_bytes = budget.used - before_copy
             argv = [
                 "/usr/bin/xvfb-run",
                 "-a",
                 *harness_argv(
-                    python, support, app, selected, state / (name + "-profile")
+                    python,
+                    support,
+                    app,
+                    selected,
+                    state / (name + "-profile"),
+                    mochitest_root=mochitest_root,
                 ),
             ]
             if selected["suite"] == "xpcshell":
@@ -1344,6 +1427,14 @@ def consume(inputs, state, recipe, context):
             verdict = verify_mozlog(
                 logs / (name + ".stdout"), selected, support, result, canary=canary
             )
+            if mochitest_root is not None:
+                current_bytes = sum(
+                    path.stat().st_size
+                    for path in mochitest_root.rglob("*")
+                    if path.is_file() and not path.is_symlink()
+                )
+                budget.consume(max(0, current_bytes - copied_bytes))
+                budget.release_tree(mochitest_root)
             cases.append({
                 "name": name,
                 "suite": case["suite"],

@@ -36,6 +36,24 @@ def _tests(value):
     raise ValueError("missing suite-start selection")
 
 
+def _canary_assertion(entry, suite):
+    if suite == "browser-chrome":
+        reason = entry.get("subtest")
+        return isinstance(reason, str) and re.fullmatch(
+            r"QA3_EXPECTED_ASSERTION(?: - .*)?", reason
+        )
+    message = entry.get("message")
+    return (
+        suite == "xpcshell"
+        and entry.get("subtest") == "run_test"
+        and isinstance(message, str)
+        and re.fullmatch(
+            r"\[run_test : [1-9][0-9]*\] QA3_EXPECTED_ASSERTION - false == true",
+            message,
+        )
+    )
+
+
 def verify_mozlog(path, case, package, process, canary=False):
     if (
         path.is_symlink()
@@ -106,8 +124,7 @@ def verify_mozlog(path, case, package, process, canary=False):
                         canary
                         and status == "FAIL"
                         and entry.get("expected") == "PASS"
-                        and isinstance(reason, str)
-                        and re.fullmatch(r"QA3_EXPECTED_ASSERTION(?: - .*)?", reason)
+                        and _canary_assertion(entry, case["suite"])
                     ):
                         canary_hits += 1
                     elif status != "PASS" or entry.get("expected", "PASS") != "PASS":
