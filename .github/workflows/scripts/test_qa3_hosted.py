@@ -15,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import qa3_bootstrap_probe as bootstrap_probe
 import qa3_hosted as hosted
 import qa3_hosted_boundary as boundary
 from qa3_build_profile import ac_options, enable_hosted_test_support, profile
@@ -356,6 +357,8 @@ class HostedSourceStamping(unittest.TestCase):
             + "\nMOZ_AUTOMATION=1\nMOZ_OBJDIR="
             + str(self.source / "obj-x86_64-pc-linux-gnu")
             + "\nMACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE=pip\n"
+            + "TASKCLUSTER_ROOT_URL=https://firefox-ci-tc.services.mozilla.com\n"
+            + "MOZ_SCM_LEVEL=3\n"
             + "".join(
                 "MOZ_AUTOMATION_" + name + "=0\n" for name in hosted.AUTOMATION_PHASES
             ),
@@ -1599,6 +1602,169 @@ class HostedPackagingDependencies(unittest.TestCase):
             "qa3-packaging-preflight/logs/*.process.json", diagnostics["with"]["path"]
         )
         self.assertEqual(diagnostics["with"]["retention-days"], 1)
+
+
+class HostedBootstrapPrerequisites(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def catalog(self):
+        return {
+            "schema": "qa3-hosted-bootstrap-catalog-v1",
+            "source": "/source",
+            "state": "/state",
+            "sourceCacheKey": DIGEST,
+            "cacheBytes": 100,
+            "cacheSha256": DIGEST,
+            "catalogBytes": 120,
+            "catalogSha256": DIGEST,
+            "catalogTasks": 10,
+            "dynamicInputs": ["taskcluster/scripts/misc/build-clang.sh"],
+            "cacheEnvironment": {
+                "TASKCLUSTER_ROOT_URL": bootstrap_probe.ROOT_URL,
+                "MOZ_SCM_LEVEL": "3",
+            },
+            "nativeExecuted": False,
+            "publicationAuthorized": False,
+        }
+
+    def test_only_metadata_child_omits_automation_and_controller_secrets(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "HOME": str(self.root),
+                "GITHUB_TOKEN": "private-controller-token",
+                "PIP_REQUIREMENT": "/private/lock",
+            },
+            clear=True,
+        ):
+            build = hosted.producer_environment(
+                self.root, self.root / "obj", context()["buildID"]
+            )
+        before = copy.deepcopy(build)
+        metadata = hosted.bootstrap_metadata_environment(build)
+        self.assertNotIn("MOZ_AUTOMATION", metadata)
+        self.assertEqual(build, before)
+        self.assertEqual(build["MOZ_AUTOMATION"], "1")
+        self.assertEqual(
+            metadata, {k: v for k, v in build.items() if k != "MOZ_AUTOMATION"}
+        )
+        self.assertNotIn("GITHUB_TOKEN", metadata)
+        self.assertNotIn("PIP_REQUIREMENT", metadata)
+        bootstrap_probe.validate_environment("prepare", metadata)
+        bootstrap_probe.validate_environment("verify", build)
+
+    def test_false_or_empty_automation_is_still_not_standalone_metadata(self):
+        env = {
+            "TASKCLUSTER_ROOT_URL": bootstrap_probe.ROOT_URL,
+            "MOZ_SCM_LEVEL": "3",
+            "MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE": "pip",
+        }
+        bootstrap_probe.validate_environment("prepare", env)
+        for value in ("0", "", "1"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                bootstrap_probe.validate_environment(
+                    "prepare", {**env, "MOZ_AUTOMATION": value}
+                )
+        for key in ("TASK_ID", "MACH_NO_FUNC_CACHE"):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                hosted.bootstrap_metadata_environment({**env, key: ""})
+        for key, value in (
+            ("TASK_ID", "fake"),
+            ("MACH_NO_FUNC_CACHE", ""),
+            ("TASKCLUSTER_ROOT_URL", "https://example.invalid"),
+            ("MOZ_SCM_LEVEL", "1"),
+        ):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                bootstrap_probe.validate_environment("prepare", {**env, key: value})
+
+    def test_missing_or_changed_catalog_identity_cannot_reach_build(self):
+        original = self.catalog()
+        hosted.verify_bootstrap_catalog(
+            original, copy.deepcopy(original), Path("/source"), Path("/state")
+        )
+        for key in original:
+            missing = copy.deepcopy(original)
+            del missing[key]
+            with self.subTest(key=key, change="missing"), self.assertRaises(ValueError):
+                hosted.verify_bootstrap_catalog(
+                    missing, missing, Path("/source"), Path("/state")
+                )
+            changed = copy.deepcopy(original)
+            changed[key] = None
+            with self.subTest(key=key, change="drift"), self.assertRaises(ValueError):
+                hosted.verify_bootstrap_catalog(
+                    original, changed, Path("/source"), Path("/state")
+                )
+        for key, value in (
+            ("cacheSha256", "invalid"),
+            ("cacheBytes", True),
+            ("catalogBytes", 0),
+            ("catalogTasks", 10001),
+            ("dynamicInputs", []),
+            ("nativeExecuted", True),
+            ("publicationAuthorized", True),
+        ):
+            changed = {**original, key: value}
+            with self.subTest(key=key, change="invalid"), self.assertRaises(ValueError):
+                hosted.verify_bootstrap_catalog(
+                    changed, changed, Path("/source"), Path("/state")
+                )
+        for source, state in (("/foreign", "/state"), ("/source", "/foreign")):
+            with self.subTest(source=source, state=state), self.assertRaises(
+                ValueError
+            ):
+                hosted.verify_bootstrap_catalog(
+                    original, original, Path(source), Path(state)
+                )
+
+    def test_verify_audit_hook_rejects_real_subprocess_in_fresh_process(self):
+        import subprocess
+        import sys
+
+        code = (
+            "import sys,subprocess; from qa3_bootstrap_probe import prohibit_subprocess; "
+            "sys.addaudithook(prohibit_subprocess); "
+            "subprocess.run([sys.executable,'-c',\"print('must-not-run')\"])"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=SOURCE / ".github/workflows/scripts",
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            b"expected source cache hit attempted a subprocess", result.stderr
+        )
+        self.assertNotIn(b"must-not-run\n", result.stdout)
+
+    def test_bootstrap_metadata_failure_prevents_decoder_and_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = SimpleNamespace(
+                source=Path(directory),
+                objdir=Path(directory) / "obj",
+                output=Path(directory) / "output",
+                build_id=context()["buildID"],
+            )
+            with mock.patch.object(
+                hosted, "context_from_environment", return_value=context()
+            ), mock.patch.object(
+                hosted, "source_stamp_environment", return_value={}
+            ), mock.patch.object(
+                hosted, "producer_environment", return_value={"MOZ_AUTOMATION": "1"}
+            ), mock.patch.object(
+                hosted,
+                "run_diagnosed",
+                side_effect=ValueError("original metadata failure"),
+            ) as run:
+                with self.assertRaisesRegex(ValueError, "original metadata failure"):
+                    hosted.packaging_preflight(args)
+                self.assertEqual(run.call_count, 1)
+                self.assertEqual(run.call_args.args[4], "bootstrap-catalog-prepare")
 
 
 class HostedMozbaseArchiveShape(unittest.TestCase):

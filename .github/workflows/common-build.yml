@@ -273,6 +273,7 @@ jobs:
             ${{ runner.temp }}/qa3-hosted-producer/logs/package-tests.stdout
             ${{ runner.temp }}/qa3-packaging-preflight/probe.json
             ${{ runner.temp }}/qa3-packaging-preflight/preflight.json
+            ${{ runner.temp }}/qa3-packaging-preflight/bootstrap-*.json
             ${{ runner.temp }}/qa3-packaging-preflight/logs/*.stdout
             ${{ runner.temp }}/qa3-packaging-preflight/logs/*.stderr
             ${{ runner.temp }}/qa3-packaging-preflight/logs/*.process.json

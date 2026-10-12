@@ -46,7 +46,7 @@ from qa3_source_cohort import file_digest, hash_value, verify_patches
 from runtime_build_context import derive_build_id, fetch_actions_run
 
 REPOSITORY = "Floorp-Projects/Floorp-Runtime"
-BRANCH = "codex/qa3-actions-native-proof-qa337-07"
+BRANCH = "codex/qa3-actions-native-proof-qa337-08"
 WORKFLOW = ".github/workflows/qa3-hosted-linux-debug.yml"
 PROFILE = "github-hosted-debug-to-blacksmith-consumer"
 SEED_SHA = "e084ba7bb4b62a0581266319bfefd7f671bdeb3e39e7f7149de9657cb97a718c"
@@ -472,11 +472,17 @@ def verify_support(support, value):
 
 
 def build_environment(source, context):
+    require(
+        "TASK_ID" not in os.environ and "MACH_NO_FUNC_CACHE" not in os.environ,
+        "hosted route requires standalone source cache metadata",
+    )
     values = source_stamp_environment(source, context)
     values.update(
         MOZ_AUTOMATION="1",
         MOZ_OBJDIR=str(source.resolve() / "obj-x86_64-pc-linux-gnu"),
         MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE="pip",
+        TASKCLUSTER_ROOT_URL="https://firefox-ci-tc.services.mozilla.com",
+        MOZ_SCM_LEVEL="3",
     )
     values.update({"MOZ_AUTOMATION_" + name: "0" for name in AUTOMATION_PHASES})
     return values
@@ -491,7 +497,76 @@ def producer_environment(source, objdir, build_id):
     )
     env["MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE"] = "pip"
     env["SCCACHE_GHA_RW_MODE"] = "READ_ONLY"
+    env["TASKCLUSTER_ROOT_URL"] = "https://firefox-ci-tc.services.mozilla.com"
+    env["MOZ_SCM_LEVEL"] = "3"
     return env
+
+
+def bootstrap_metadata_environment(env):
+    prepared = dict(env)
+    require(
+        "TASK_ID" not in prepared and "MACH_NO_FUNC_CACHE" not in prepared,
+        "hosted metadata cannot impersonate Taskcluster or disable source cache",
+    )
+    prepared.pop("MOZ_AUTOMATION", None)
+    return prepared
+
+
+def verify_bootstrap_catalog(prepared, verified, source, state):
+    require(
+        set(prepared)
+        == {
+            "schema",
+            "source",
+            "state",
+            "sourceCacheKey",
+            "cacheBytes",
+            "cacheSha256",
+            "catalogBytes",
+            "catalogSha256",
+            "catalogTasks",
+            "dynamicInputs",
+            "cacheEnvironment",
+            "nativeExecuted",
+            "publicationAuthorized",
+        },
+        "missing bootstrap catalog evidence",
+    )
+    for name in ("sourceCacheKey", "cacheSha256", "catalogSha256"):
+        require(
+            isinstance(prepared[name], str)
+            and re.fullmatch(r"[a-f0-9]{64}", prepared[name]),
+            "invalid bootstrap catalog digest",
+        )
+    for name, maximum in (
+        ("cacheBytes", 8 * 1024**2),
+        ("catalogBytes", 8 * 1024**2),
+        ("catalogTasks", 10000),
+    ):
+        require(
+            type(prepared[name]) is int and 0 < prepared[name] <= maximum,
+            "invalid bootstrap catalog size",
+        )
+    require(
+        isinstance(prepared["dynamicInputs"], list)
+        and 0 < len(prepared["dynamicInputs"]) <= 4096
+        and all(isinstance(name, str) and name for name in prepared["dynamicInputs"]),
+        "missing bootstrap catalog source inputs",
+    )
+    require(
+        prepared == verified
+        and prepared.get("schema") == "qa3-hosted-bootstrap-catalog-v1"
+        and prepared.get("source") == str(source.resolve())
+        and prepared.get("state") == str(state.resolve())
+        and prepared.get("nativeExecuted") is False
+        and prepared.get("publicationAuthorized") is False
+        and prepared.get("cacheEnvironment")
+        == {
+            "TASKCLUSTER_ROOT_URL": "https://firefox-ci-tc.services.mozilla.com",
+            "MOZ_SCM_LEVEL": "3",
+        },
+        "metadata preparation and automated build source cache differ",
+    )
 
 
 def emit_owned_failure(logs, name, *, data_stdout=False):
@@ -577,6 +652,38 @@ def packaging_preflight(args):
     env.update(source_stamp_environment(args.source, context))
     output = fresh(args.output)
     logs = fresh(output / "logs")
+    bootstrap_processes = []
+    bootstrap_records = []
+    for phase in ("prepare", "verify"):
+        record = output / ("bootstrap-" + phase + ".json")
+        bootstrap_processes.append(
+            run_diagnosed(
+                [
+                    "/usr/bin/python3.12",
+                    str(args.source / "mach"),
+                    "python",
+                    "--virtualenv",
+                    "build",
+                    str(Path(__file__).parent / "qa3_bootstrap_probe.py"),
+                    "--source",
+                    str(args.source),
+                    "--phase",
+                    phase,
+                    "--output",
+                    str(record),
+                ],
+                args.source,
+                bootstrap_metadata_environment(env) if phase == "prepare" else env,
+                logs,
+                "bootstrap-catalog-" + phase,
+                180,
+                log_limit=16 * 1024**2,
+            )
+        )
+        bootstrap_records.append(read_json(record))
+    verify_bootstrap_catalog(
+        *bootstrap_records, args.source, Path(env["MOZBUILD_STATE_PATH"])
+    )
     decoder_version = run_diagnosed(
         ["/usr/bin/zstd", "--version"],
         args.source,
@@ -642,6 +749,8 @@ def packaging_preflight(args):
             "process": result,
             "decoderVersionProcess": decoder_version,
             "decoderProcess": decoder,
+            "bootstrapCatalog": bootstrap_records[0],
+            "bootstrapProcesses": bootstrap_processes,
             "publicationAuthorized": False,
         },
     )
@@ -652,6 +761,7 @@ def packaging_preflight(args):
                 "context": context,
                 "probe": probe,
                 "fixedDecoderRoundtrip": "PASS_SOURCE_FIXTURE_ONLY",
+                "bootstrapCatalog": bootstrap_records[0],
             },
             sort_keys=True,
         ),
