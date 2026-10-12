@@ -89,6 +89,8 @@ def probe(source, output):
                 or tar.extractfile(members[0]).read() != payload
             ):
                 raise ValueError("actual Mozilla tar.zst writer roundtrip differs")
+    with (output.parent / "probe-fixture.tar.zst").open("xb") as stream:
+        stream.write(compressed)
     value = {
         "schema": "qa3-packaging-python-probe-v1",
         "verdict": "PASS_SOURCE_ARCHIVE_ONLY",
@@ -109,6 +111,7 @@ def probe(source, output):
         "archiverSha256": hashlib.sha256(archiver.read_bytes()).hexdigest(),
         "probeArchiveSha256": hashlib.sha256(compressed).hexdigest(),
         "probeArchiveBytes": len(compressed),
+        "probeTarSha256": hashlib.sha256(decoded).hexdigest(),
     }
     with output.open("x") as stream:
         stream.write(json.dumps(value, indent=2) + "\n")

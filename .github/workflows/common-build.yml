@@ -135,6 +135,7 @@ jobs:
                   stream.write(name + '=' + value + '\n')
           PY
           echo 'SCCACHE_GHA_RW_MODE=READ_ONLY' >> "$GITHUB_ENV"
+          echo 'QA3_KEEP_CARGO_FOR_TEST_PACKAGING=1' >> "$GITHUB_ENV"
 
       - name: Download macOS SDK
         if: inputs.platform == 'mac'

@@ -46,13 +46,38 @@ from qa3_source_cohort import file_digest, hash_value, verify_patches
 from runtime_build_context import derive_build_id, fetch_actions_run
 
 REPOSITORY = "Floorp-Projects/Floorp-Runtime"
-BRANCH = "codex/qa3-actions-native-proof-qa337-04"
+BRANCH = "codex/qa3-actions-native-proof-qa337-05"
 WORKFLOW = ".github/workflows/qa3-hosted-linux-debug.yml"
 PROFILE = "github-hosted-debug-to-blacksmith-consumer"
 SEED_SHA = "e084ba7bb4b62a0581266319bfefd7f671bdeb3e39e7f7149de9657cb97a718c"
 MAX_TRANSFER = 20 * GIB
 MAX_ARTIFACT_STORAGE = 40 * GIB
 WRAPPER_FILES = {"runtime.tar.xz", "test-support.tar.gz", "producer.json"}
+MOZBASE_MODULES = (
+    "manifestparser",
+    "mozcrash",
+    "mozdebug",
+    "mozdevice",
+    "mozfile",
+    "mozgeckoprofiler",
+    "mozhttpd",
+    "mozinfo",
+    "mozinstall",
+    "mozleak",
+    "mozlog",
+    "moznetwork",
+    "mozpower",
+    "mozprocess",
+    "mozprofile",
+    "mozproxy",
+    "mozrunner",
+    "mozscreenshot",
+    "mozserve",
+    "mozshellutil",
+    "mozsystemmonitor",
+    "moztest",
+    "mozversion",
+)
 
 
 def require(condition, message):
@@ -409,6 +434,7 @@ def verify_support(support, value):
             "xpcom/geckoprocesstypes_generator/geckoprocesstypes/__init__.py",
             "tools/geckoprocesstypes_generator/geckoprocesstypes/__init__.py",
         ),
+        ("testing/mozbase/setup_development.py", "mozbase/setup_development.py"),
     ):
         require(
             file_digest(support / archive) == source_hashes[source],
@@ -520,6 +546,15 @@ def packaging_preflight(args):
     env.update(source_stamp_environment(args.source, context))
     output = fresh(args.output)
     logs = fresh(output / "logs")
+    decoder_version = run_diagnosed(
+        ["/usr/bin/zstd", "--version"],
+        args.source,
+        env,
+        logs,
+        "packaging-decoder-version",
+        10,
+        log_limit=1024**2,
+    )
     result = run_diagnosed(
         [
             "/usr/bin/python3.12",
@@ -545,12 +580,37 @@ def packaging_preflight(args):
         probe.get("verdict") == "PASS_SOURCE_ARCHIVE_ONLY",
         "packaging Python preflight failed",
     )
+    archive = output / "probe-fixture.tar.zst"
+    require(
+        archive.stat().st_size <= 65536
+        and file_digest(archive) == probe["probeArchiveSha256"],
+        "packaging decoder fixture changed",
+    )
+    decoder = run_diagnosed(
+        ["/usr/bin/zstd", "-d", "--stdout", "--", str(archive)],
+        args.source,
+        env,
+        logs,
+        "packaging-decoder-roundtrip",
+        10,
+        data_stdout=True,
+        data_limit=16384,
+        io_budget=IOBudget(output, maximum=32 * 1024**2, minimum_free=GIB),
+        log_limit=1024**2,
+    )
+    require(
+        file_digest(logs / "packaging-decoder-roundtrip.stdout")
+        == probe["probeTarSha256"],
+        "packaging decoder roundtrip differs",
+    )
     write_json(
         output / "preflight.json",
         {
             "context": context,
             "probe": probe,
             "process": result,
+            "decoderVersionProcess": decoder_version,
+            "decoderProcess": decoder,
             "publicationAuthorized": False,
         },
     )
@@ -560,6 +620,7 @@ def packaging_preflight(args):
                 "schema": "qa3-packaging-preflight-v1",
                 "context": context,
                 "probe": probe,
+                "fixedDecoderRoundtrip": "PASS_SOURCE_FIXTURE_ONLY",
             },
             sort_keys=True,
         ),
@@ -568,6 +629,25 @@ def packaging_preflight(args):
 
 
 def consumer_module_roots(support):
+    mozbase = support / "mozbase"
+    require(mozbase.is_dir() and not mozbase.is_symlink(), "missing packaged mozbase")
+    require(
+        {path.name for path in mozbase.iterdir()}
+        == {*MOZBASE_MODULES, "setup_development.py"},
+        "unexpected packaged mozbase entries",
+    )
+    metadata = mozbase / "setup_development.py"
+    source_hashes = {
+        row["path"]: row["sha256"]
+        for row in read_json(support / "plan.json")["sourceMaterials"]
+    }
+    require(
+        metadata.is_file()
+        and not metadata.is_symlink()
+        and file_digest(metadata)
+        == source_hashes.get("testing/mozbase/setup_development.py"),
+        "packaged mozbase metadata differs from pinned source",
+    )
     process_types = support / "tools/geckoprocesstypes_generator"
     require(
         process_types.is_dir()
@@ -579,7 +659,7 @@ def consumer_module_roots(support):
     modules = [
         support / "modules",
         support,
-        *sorted((support / "mozbase").iterdir()),
+        *(mozbase / name for name in MOZBASE_MODULES),
         process_types,
     ]
     require(
@@ -759,6 +839,7 @@ def produce(args):
             (support / name).is_dir() and any((support / name).iterdir()),
             "incomplete support",
         )
+    consumer_module_roots(support)
     support_sha = pack_tree(support, output / "test-support.tar.gz", budget)
     source_record = read_json(args.primary / "runtime-source-provenance.json")
     upstream = read_json(args.source / ".github/runtime-upstream.json")

@@ -1261,6 +1261,7 @@ class HostedPackagingDependencies(unittest.TestCase):
                 "GITHUB_TOKEN": "private-controller-token",
                 "PIP_REQUIREMENT": "/private/lock",
                 "SCCACHE_GHA_RW_MODE": "READ_WRITE",
+                "QA3_KEEP_CARGO_FOR_TEST_PACKAGING": "1",
             },
             clear=True,
         ):
@@ -1275,15 +1276,23 @@ class HostedPackagingDependencies(unittest.TestCase):
             self.assertNotIn(name, env)
         self.assertNotIn("MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE", consumer)
         self.assertNotIn("SCCACHE_GHA_RW_MODE", consumer)
+        self.assertNotIn("QA3_KEEP_CARGO_FOR_TEST_PACKAGING", env)
+        self.assertNotIn("QA3_KEEP_CARGO_FOR_TEST_PACKAGING", consumer)
 
     def material(self):
         support = self.root / "support"
         for name in (
             "modules",
-            "mozbase/fixture",
+            *("mozbase/" + name for name in hosted.MOZBASE_MODULES),
             "tools/geckoprocesstypes_generator/geckoprocesstypes",
         ):
             (support / name).mkdir(parents=True)
+        (support / "plan.json").write_bytes(
+            (SOURCE / ".github/qa/linux-proof-plan.json").read_bytes()
+        )
+        (support / "mozbase/setup_development.py").write_bytes(
+            (SOURCE / "testing/mozbase/setup_development.py").read_bytes()
+        )
         (
             support / "tools/geckoprocesstypes_generator/geckoprocesstypes/__init__.py"
         ).write_text("process_types = ['fixed-packaged-fixture']\n")
@@ -1459,6 +1468,189 @@ class HostedPackagingDependencies(unittest.TestCase):
             "qa3-packaging-preflight/logs/*.process.json", diagnostics["with"]["path"]
         )
         self.assertEqual(diagnostics["with"]["retention-days"], 1)
+
+
+class HostedMozbaseArchiveShape(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.support = HostedPackagingDependencies.material(self)
+
+    def test_registered_roots_match_source_and_packaged_metadata_is_not_a_root(self):
+        build = ast.parse((SOURCE / "testing/mozbase/moz.build").read_bytes())
+        registered = next(
+            ast.literal_eval(node.value)
+            for node in build.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "python_modules"
+                for target in node.targets
+            )
+        )
+        self.assertEqual(list(hosted.MOZBASE_MODULES), registered)
+        plan = read_json(self.support / "plan.json")
+        source_hashes = {row["path"]: row["sha256"] for row in plan["sourceMaterials"]}
+        for name in ("moz.build", "setup_development.py"):
+            self.assertEqual(
+                file_digest(SOURCE / "testing/mozbase" / name),
+                source_hashes["testing/mozbase/" + name],
+            )
+        roots = hosted.consumer_module_roots(self.support)
+        self.assertEqual(
+            roots[2:-1], [self.support / "mozbase" / name for name in registered]
+        )
+        self.assertNotIn(self.support / "mozbase/setup_development.py", roots)
+
+    def test_unknown_root_file_and_directory_are_rejected(self):
+        unknown = self.support / "mozbase/unknown"
+        for kind in ("file", "directory"):
+            with self.subTest(kind=kind):
+                if kind == "file":
+                    unknown.write_text("unexpected")
+                else:
+                    unknown.mkdir()
+                with self.assertRaises(ValueError):
+                    hosted.consumer_module_roots(self.support)
+                if kind == "file":
+                    unknown.unlink()
+                else:
+                    unknown.rmdir()
+
+    def test_missing_module_and_linked_module_are_rejected(self):
+        module = self.support / "mozbase/manifestparser"
+        module.rmdir()
+        with self.assertRaises(ValueError):
+            hosted.consumer_module_roots(self.support)
+        outside = self.root / "outside"
+        outside.mkdir()
+        module.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            hosted.consumer_module_roots(self.support)
+
+    def test_missing_changed_or_linked_metadata_is_rejected(self):
+        metadata = self.support / "mozbase/setup_development.py"
+        original = metadata.read_bytes()
+        metadata.unlink()
+        with self.assertRaises(ValueError):
+            hosted.consumer_module_roots(self.support)
+        metadata.write_bytes(original + b"\nchanged = True\n")
+        with self.assertRaises(ValueError):
+            hosted.consumer_module_roots(self.support)
+        metadata.unlink()
+        outside = self.root / "setup_development.py"
+        outside.write_bytes(original)
+        metadata.symlink_to(outside)
+        with self.assertRaises(ValueError):
+            hosted.consumer_module_roots(self.support)
+
+    def test_linked_mozbase_root_is_rejected(self):
+        root = self.support / "mozbase"
+        outside = self.root / "outside"
+        root.rename(outside)
+        root.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            hosted.consumer_module_roots(self.support)
+
+
+class HostedCargoPackagingClosure(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def invoke(self, directory, platform, arch, pgo, flag):
+        import subprocess
+
+        directory.mkdir()
+        home = directory / "home"
+        cargo = home / ".cargo"
+        cargo.mkdir(parents=True)
+        (cargo / "configured-tool-fixture").write_text("retained tool fixture")
+        commands = directory / "bin"
+        commands.mkdir()
+        helpers = {
+            "nproc": "printf '4\\n'\n",
+            "sudo": "exit 0\n",
+            "xvfb-run": 'shift 3\nexec "$@"\n',
+        }
+        for name, body in helpers.items():
+            target = commands / name
+            target.write_text("#!/usr/bin/env bash\n" + body)
+            target.chmod(0o755)
+        mach = directory / "mach"
+        mach.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf "%s\\n" "$1" >> fixture-mach-invocations\n'
+            'if [[ "$1" == "package" ]]; then\n'
+            "  mkdir -p obj-x86_64-pc-linux-gnu/dist/{bin,host}\n"
+            "  printf 'fixture' > obj-x86_64-pc-linux-gnu/dist/floorp-fixture.tar.xz\n"
+            "  printf 'fixture' > obj-x86_64-pc-linux-gnu/dist/host/fixture\n"
+            '  printf "BuildID=%s\\n" "$MOZ_BUILD_DATE" > obj-x86_64-pc-linux-gnu/dist/bin/application.ini\n'
+            '  printf \'#!/usr/bin/env bash\\nprintf "%%s %%s\\\\n" "$MOZ_BUILD_DATE" "$MOZ_BUILD_DATE"\\n\' > obj-x86_64-pc-linux-gnu/dist/bin/floorp\n'
+            "  chmod +x obj-x86_64-pc-linux-gnu/dist/bin/floorp\n"
+            "fi\n"
+        )
+        mach.chmod(0o755)
+        env = {
+            "HOME": str(home),
+            "PATH": str(commands) + ":/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+        }
+        if flag is not None:
+            env["QA3_KEEP_CARGO_FOR_TEST_PACKAGING"] = flag
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                str(SOURCE / ".github/workflows/scripts/build-and-package.sh"),
+                platform,
+                arch,
+                "20261011000000",
+                pgo,
+            ],
+            cwd=directory,
+            env=env,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+        return result, cargo
+
+    def test_actual_shell_keeps_only_opt_in_tools_and_default_cleanup_is_preserved(
+        self,
+    ):
+        for index, flag in enumerate((None, "0", "1")):
+            with self.subTest(flag=flag):
+                directory = self.root / str(index)
+                result, cargo = self.invoke(directory, "linux", "x86_64", "", flag)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(cargo.exists(), flag == "1")
+                self.assertEqual(
+                    (directory / "fixture-mach-invocations").read_text(),
+                    "configure\nbuild\npackage\n",
+                )
+                self.assertTrue(
+                    (
+                        directory
+                        / "home/output/floorp-linux-x86_64-moz-artifact-bundle/floorp-linux-x86_64-moz-artifact.tar.xz"
+                    ).is_file()
+                )
+
+    def test_invalid_opt_in_routes_are_rejected_before_any_mach_command(self):
+        for index, (platform, arch, pgo, flag) in enumerate((
+            ("mac", "x86_64", "", "1"),
+            ("windows", "x86_64", "", "1"),
+            ("linux", "aarch64", "", "1"),
+            ("linux", "x86_64", "generate", "1"),
+            ("linux", "x86_64", "use", "1"),
+            ("linux", "x86_64", "", "true"),
+        )):
+            with self.subTest(platform=platform, arch=arch, pgo=pgo, flag=flag):
+                directory = self.root / str(index)
+                result, cargo = self.invoke(directory, platform, arch, pgo, flag)
+                self.assertEqual(result.returncode, 1)
+                self.assertTrue(cargo.is_dir())
+                self.assertFalse((directory / "fixture-mach-invocations").exists())
 
 
 if __name__ == "__main__":
