@@ -5,15 +5,15 @@
   "target": "x86_64-pc-linux-gnu",
   "sourceMaterials": [
     {
-      "path": "browser/base/content/test/performance/browser_hiddenwindow_existence.js",
+      "path": "browser/base/content/test/browser-performance/browser_hiddenwindow_existence.js",
       "sha256": "1bb1b457fe97d23a3b767fbefe4e9333427a67259255475c11b3ccd888f332dd"
     },
     {
-      "path": "browser/base/content/test/performance/browser.toml",
+      "path": "browser/base/content/test/browser-performance/browser.toml",
       "sha256": "5d912d9a5f1e6c5df1831429cefeca513d2ad86de1180f9c4da1c0d292bc6530"
     },
     {
-      "path": "browser/base/content/test/performance/head.js",
+      "path": "browser/base/content/test/browser-performance/head.js",
       "sha256": "1c5ca21a4b9ba8920fd7bbe5aa3454006fab3094ae48eead294c64e4d1693963"
     },
     {
@@ -30,15 +30,15 @@
     },
     {
       "path": "testing/testsuite-targets.mk",
-      "sha256": "47dff65b7fa40b1840fb37ae6f8f3e0ca9d6489b467edffbe176ce13e6aa6133"
+      "sha256": "f54c1cdc661fabc5231e04f0c0fc8b3224ac015fcff4e15b5a45e1d4563b609d"
     },
     {
       "path": "python/mozbuild/mozbuild/action/test_archive.py",
-      "sha256": "43a6d32d18ffd4048a6b2c8eb985e9554cd9129c4e0a8ded048a2b4580e0e968"
+      "sha256": "0883fa7cc470866e1c84a050256f4f0b75805ff93fdd94a4a6906a872058bc92"
     },
     {
       "path": "testing/mochitest/runtests.py",
-      "sha256": "aeb32f022d18d12ce1ad951ba5f34459bb03eff424ad398ea1d4db6074162a3e"
+      "sha256": "e7bb50d0393e3834f6ef98b11f67f832f7215c658d82dfc72ce3c1720de04c49"
     },
     {
       "path": "testing/mochitest/mochitest_options.py",
@@ -46,7 +46,7 @@
     },
     {
       "path": "testing/xpcshell/runxpcshelltests.py",
-      "sha256": "aa38d12bce677ff2b4c9f4a2a70498e2d62a92a8e59612fda81253337a6c9362"
+      "sha256": "6d62bb5191fb1662c45bb3a544c84fbf3c89889dd60b0586a4993b39d50c26ad"
     },
     {
       "path": "testing/xpcshell/xpcshellcommandline.py",
@@ -80,9 +80,9 @@
   "selection": [
     {
       "suite": "browser-chrome",
-      "id": "browser/base/content/test/performance/browser_hiddenwindow_existence.js",
-      "manifest": "browser/base/content/test/performance/browser.toml",
-      "archivePath": "mochitest/browser/browser/base/content/test/performance/browser_hiddenwindow_existence.js",
+      "id": "browser/base/content/test/browser-performance/browser_hiddenwindow_existence.js",
+      "manifest": "browser/base/content/test/browser-performance/browser.toml",
+      "archivePath": "mochitest/browser/browser/base/content/test/browser-performance/browser_hiddenwindow_existence.js",
       "minimumAssertions": 1,
       "declaredConditions": {},
       "requiredNoSkip": true

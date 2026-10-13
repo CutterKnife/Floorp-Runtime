@@ -460,8 +460,8 @@ def verify_support(support, value):
         ("testing/xpcshell/runxpcshelltests.py", "xpcshell/runxpcshelltests.py"),
         ("testing/xpcshell/xpcshellcommandline.py", "xpcshell/xpcshellcommandline.py"),
         (
-            "browser/base/content/test/performance/head.js",
-            "mochitest/browser/browser/base/content/test/performance/head.js",
+            "browser/base/content/test/browser-performance/head.js",
+            "mochitest/browser/browser/base/content/test/browser-performance/head.js",
         ),
         (
             "xpcom/tests/unit/head_xpcom.js",

@@ -313,8 +313,6 @@
   <string name="browser_menu_default_banner_title">Elige %1$s como predeterminado</string>
   <!-- Label text within the set as default banner -->
   <string name="browser_menu_default_banner_subtitle_2">Rápido, privado y hecho a tu medida.</string>
-  <!-- Content description (not visible, for screen readers etc.) for the button that dismisses the set as default banner in the menu -->
-  <string name="browser_menu_default_banner_dismiss_promotion">Descartar promoción</string>
   <!-- Content description (not visible, for screen readers etc.) for recommended extensions in main menu -->
   <string name="browser_menu_recommended_extensions_content_description">Más información</string>
   <!--
@@ -1272,8 +1270,6 @@
   <string name="preference_simple_toolbar">Simple</string>
   <!-- Preference for using expanded toolbar -->
   <string name="preference_expanded_toolbar">Expandido</string>
-  <!-- Preference description indicating the toolbar location preference is disabled when the tab strip is enabled -->
-  <string name="preference_toolbar_pref_disabled_explanation">La barra de direcciones debe estar en la parte superior cuando se muestra la barra de pestañas.</string>
   <!-- New tab shortcut in toolbar customization -->
   <string name="toolbar_customize_shortcut_new_tab">Abrir una nueva pestaña</string>
   <!-- Share shortcut in toolbar customization -->
@@ -1405,8 +1401,6 @@
     Title of preference for tabs management
   -->
   <string name="preferences_tabs">Pestañas</string>
-  <!-- Title of preference that allows a user to specify the tab view -->
-  <string name="preferences_tab_view">Vista de pestaña</string>
   <!-- Option for a list tab view -->
   <string name="tab_view_list">Lista</string>
   <!-- Option for a grid tab view -->
@@ -1453,16 +1447,8 @@
   <string name="opening_screen_last_tab_summary">Abrir en la última pestaña</string>
   <!-- Summary for homepage preference indicating opening the homepage when re-opening the app after four hours of inactivity -->
   <string name="opening_screen_after_four_hours_of_inactivity_summary">Abrir en la página de inicio después de cuatro horas</string>
-  <!--
-    Inactive tabs
-
-    Category header of a preference that allows a user to enable or disable the inactive tabs feature
-  -->
-  <string name="preferences_inactive_tabs">Mover pestañas antiguas a inactivas</string>
   <!-- Summary of the preference that allows a user to enable or disable the inactive tabs feature. -->
   <string name="preferences_inactive_tabs_title">Las pestañas que no has visto durante dos semanas se mueven a la sección inactiva.</string>
-  <!-- Title for the preference to enable or disable the tab groups feature -->
-  <string name="preferences_tab_groups_feature">Habilitar grupos de pestañas</string>
   <!--
     Privacy report
 
@@ -2375,6 +2361,10 @@
   <string name="sync_send_to_all">Enviar a todos los dispositivos</string>
   <!-- An option from the share dialog to reconnect to sync -->
   <string name="sync_reconnect">Reconectar a Sync</string>
+  <!-- Label for the button in the share dialog that sends the tab to the selected sync devices -->
+  <string name="sync_send_to_selected_devices">Enviar</string>
+  <!-- Content description announced when a device is selected in the share dialog -->
+  <string name="send_to_devices_device_selected_content_description">Seleccionado</string>
   <!-- Text displayed when sync is offline and cannot be accessed -->
   <string name="sync_offline">Sin conexión</string>
   <!-- An option to connect additional devices -->
@@ -2411,6 +2401,8 @@
   <string name="sync_send_tab_error_connection_title">Revisa tu conexión a Internet</string>
   <!-- Send tab to synced devices: Connectivity Error message - Suggested user action after internet connection has been established -->
   <string name="sync_send_tab_error_connection_text">Intenta reenviar tu pestaña.</string>
+  <!-- Send tab to synced devices: Connectivity Error button - When tapped, refreshes the list of connected devices. -->
+  <string name="sync_send_tab_error_connection_button">Reintentar</string>
   <!--
     Notifications
 

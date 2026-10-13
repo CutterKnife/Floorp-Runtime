@@ -1,11 +1,10 @@
 diff --git a/moz.build b/moz.build
-index f5d612d834..0b32a39cd7 100644
 --- a/moz.build
 +++ b/moz.build
-@@ -249,3 +249,7 @@ SPHINX_TREES["jsloader"] = "docs/jsloader"
- SPHINX_TREES["ai-agent-tools"] = "docs/ai-agent-tools"
- 
- include("build/templates.mozbuild")
+@@ -381,3 +381,7 @@
+         ],
+         force=True,
+     )
 +
 +DIRS += [
 +    ".github/assets/pre-build",

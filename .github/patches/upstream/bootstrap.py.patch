@@ -1,10 +1,9 @@
 diff --git a/python/mozboot/mozboot/bootstrap.py b/python/mozboot/mozboot/bootstrap.py
-index 0036e37753..c6be467bd5 100644
 --- a/python/mozboot/mozboot/bootstrap.py
 +++ b/python/mozboot/mozboot/bootstrap.py
-@@ -44,26 +44,15 @@ from mozboot.void import VoidBootstrapper
+@@ -43,26 +43,15 @@
  from mozboot.windows import WindowsBootstrapper
- 
+
  APPLICATION_CHOICE = """
 -Note on Artifact Mode:
 -
@@ -20,21 +19,21 @@ index 0036e37753..c6be467bd5 100644
 +Please choose the version of Noraneko you want to build:
  %s
  Your choice: """
- 
- APPLICATIONS = OrderedDict([
--    ("Firefox for Desktop Artifact Mode", "browser_artifact_mode"),
--    ("Firefox for Desktop", "browser"),
--    ("GeckoView/Firefox for Android Artifact Mode", "mobile_android_artifact_mode"),
--    ("GeckoView/Firefox for Android", "mobile_android"),
--    ("SpiderMonkey JavaScript engine", "js"),
-+    ("Noraneko for Desktop Artifact Mode", "browser_artifact_mode"),
-+    ("Noraneko for Desktop", "browser"),
-+    ("GeckoView/Noraneko for Android Artifact Mode", "mobile_android_artifact_mode"),
-+    ("GeckoView/Noraneko for Android", "mobile_android"),
- ])
- 
+
+ APPLICATIONS = {
+-    "Firefox for Desktop Artifact Mode": "browser_artifact_mode",
+-    "Firefox for Desktop": "browser",
+-    "GeckoView/Firefox for Android Artifact Mode": "mobile_android_artifact_mode",
+-    "GeckoView/Firefox for Android": "mobile_android",
+-    "SpiderMonkey JavaScript engine": "js",
++    "Noraneko for Desktop Artifact Mode": "browser_artifact_mode",
++    "Noraneko for Desktop": "browser",
++    "GeckoView/Noraneko for Android Artifact Mode": "mobile_android_artifact_mode",
++    "GeckoView/Noraneko for Android": "mobile_android",
+ }
+
  FINISHED = """
-@@ -452,7 +441,8 @@ class Bootstrapper:
+@@ -507,7 +496,8 @@
          elif git and checkout_type == "git":
              should_configure_git = False
              if not self.instance.no_interactive:

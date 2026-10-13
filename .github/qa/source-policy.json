@@ -12,7 +12,7 @@
     },
     {
       "path": ".github/patches/upstream/bootstrap.py.patch",
-      "sha256": "471101e57b649db6a70ef8d47fe0cf261b6bdcd5090c5f9637c0f3365eee8caf"
+      "sha256": "678754694a8ca39628604b5c98edb97eebea869a10110f265e56bb284f6df7d3"
     },
     {
       "path": ".github/patches/upstream/brandingFileIcon.patch",
@@ -40,15 +40,15 @@
     },
     {
       "path": ".github/patches/upstream/macos-app-shim-pwa-input-and-compositor.patch",
-      "sha256": "68e42e7573bae7e6a49bdec234ab92fa19a5a9f21878afa450984c2dbc69af0b"
+      "sha256": "f8ac8397bc2ab5908f2f1efcdcd873985d062d239b51d13b045510535cbb002e"
     },
     {
       "path": ".github/patches/upstream/moz.build.patch",
-      "sha256": "02221cb80b5182590d3bd77de01f8a7802820cff7c4c82f745649be0d52a6ccf"
+      "sha256": "d7cab6efd6445cd9b9c2e32ab1751e92e80015ac7e279d9b9b9a2a9397ee7e6e"
     },
     {
       "path": ".github/patches/upstream/moz.configure.patch",
-      "sha256": "b3d4b08108394a8a7cf48daf9292e65c7f9fc49995ab105c44515a14a570a5d4"
+      "sha256": "b8366597de51a2778a181ac65a5a2bb62b7f3b27d6e7ad22cf33fcf338592f48"
     },
     {
       "path": ".github/patches/upstream/nsIUpdateService.idl.patch",

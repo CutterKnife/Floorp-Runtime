@@ -21,7 +21,7 @@ TAB_ROOT = "browser/components/tabbrowser/test/browser/tabs"
 HOSTED_SELECTION = (
     (
         "browser-chrome",
-        "browser/base/content/test/performance/browser_hiddenwindow_existence.js",
+        "browser/base/content/test/browser-performance/browser_hiddenwindow_existence.js",
         1,
     ),
     ("xpcshell", "xpcom/tests/unit/test_nsIMutableArray.js", 1),
