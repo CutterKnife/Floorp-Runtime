@@ -2,31 +2,33 @@
   "schema_version": 1,
   "upstream": {
     "repository": "mozilla-firefox/firefox",
-    "version": "157.0.1",
-    "tag": "FIREFOX_157_0_1_RELEASE",
-    "commit": "0c469c2352451630bc69fc328c9f0c589c6c534d",
-    "previous_tag": "FIREFOX_157_0_RELEASE",
-    "previous_commit": "fdd757a2e09c9471cddf383e64e631e4ce178499"
+    "version": "158.0.1",
+    "tag": null,
+    "tracking_ref": "refs/heads/release",
+    "commit": "1a0cfe22a2d8ba77e77cc8f43eaa480e34eca181",
+    "tree": "04e6d359951669601fc15746904f31bd906f87f4",
+    "previous_tag": "FIREFOX_157_0_1_RELEASE",
+    "previous_commit": "0c469c2352451630bc69fc328c9f0c589c6c534d"
   },
   "floorp_patch": {
     "repository": "Floorp-Projects/Floorp",
-    "commit": "bd1e68a4fc68affcdf574cf9e2b929ab477aa890",
+    "commit": "18abb0b570bda854f3cf00d05920ed0d3ba79ab3",
     "path": ".github/patches/floorp-runtime/common/macos-app-shim-pwa-input-and-compositor.patch",
     "runtime_path": ".github/patches/upstream/macos-app-shim-pwa-input-and-compositor.patch",
-    "sha256": "1d8fd65990c128a1db7051d37887e3b64b24a15e201469e3e3e93b81b56039ce",
+    "sha256": "f8ac8397bc2ab5908f2f1efcdcd873985d062d239b51d13b045510535cbb002e",
     "patched_files": {
-      "gfx/webrender_bindings/RenderCompositorNative.cpp": "74a0c3f1fde983237156ee0721a296b10fe70011ca2a943e58c1fc4b8bcc4148",
-      "widget/cocoa/NativeMenuSupport.mm": "2945ea32b12af69fbfc712c62014bdfad939c25c4fc2307dc331219b17745b9c",
-      "widget/cocoa/appshim/MacWebAppInput.h": "7d0e555f20da6058eb9442dc4a547d8410c4f2340f1daa4ec69bed897c42e788",
-      "widget/cocoa/appshim/MacWebAppInput.mm": "7d980071a7a9f04488b16422f9ecce89ebcdf05844bca9f92b43532d5f0bcec3",
+      "gfx/webrender_bindings/RenderCompositorNative.cpp": "6fd9a00098801c4df23fa04c9589bbddb5cc2f1811e7716d0127aa2819b7a64c",
+      "widget/cocoa/NativeMenuSupport.mm": "a1f724e706bd9366e6d368d5239bca56babeebcdc521f64d879a25895e60d94d",
+      "widget/cocoa/appshim/MacWebAppInput.h": "f11f765719eebb0750ef984ad51e94c0c9ae197279a99f75c984548caf40e954",
+      "widget/cocoa/appshim/MacWebAppInput.mm": "7fd3d83b6e98f6639caf532950088786db557413383cbcbbc142539a04026593",
       "widget/cocoa/appshim/MacWebAppWidget.h": "9b1df8468cd1cc6bcac75bb2e4439e12e567d775b8a0fb268533d486918927a3",
       "widget/cocoa/appshim/MacWebAppWidget.mm": "78ab9402f65ce8ea2e81d1efd8f9854bf3435a63a5f0cb18ebed780aaa531386",
       "widget/cocoa/appshim/shim/ShimView.mm": "88aef211fa49e1f9c1bd46269fa50a5c38d5a7950e7a1dbd3578f8c30548d7cd",
-      "widget/cocoa/nsCocoaUtils.h": "41c9033c12da4dceddbd956b00a9c640d1a6beaf9ebcae60f76aa42c7faa8caf",
-      "widget/cocoa/nsCocoaUtils.mm": "0c22ada126518e43137001559ebced91723f81a74110bc2ef5800e9c010cf335",
-      "widget/nsIWidget.cpp": "795a237b3fcb3eca58e1f05a9972ff840778305e2743c987ea52fb23d614119c",
+      "widget/cocoa/nsCocoaUtils.h": "21bd73593b238d8973acbf9d0f4eb3454a9e6a10668836d6ff574d1620c2ab81",
+      "widget/cocoa/nsCocoaUtils.mm": "4f9d72eadf699be1203d642d945d0ff625f534e39d39cb0cb1325f7a012debb7",
+      "widget/nsIWidget.cpp": "33d1a517f78947683f404453e9aba3d9867dc6e4e25aee6de8326b5fda2d1ead",
       "widget/tests/gtest/TestMacWebAppPanGesture.mm": "03de4ce729d8a2ee6b752890eb231904df1246e004dd2d0ede9ddfb55b24a7cb",
-      "widget/tests/gtest/moz.build": "93eb94092710ce968e477ea4606cd3b6ecabcb94cc48f3d78f8fc095c45a7578"
+      "widget/tests/gtest/moz.build": "69e98aea3fef235bf840a6fae8c1ad392b0df7fa127aaf125fda8d26f3326da8"
     }
   }
 }
