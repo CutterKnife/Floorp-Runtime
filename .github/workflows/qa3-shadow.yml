@@ -22,13 +22,41 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
-          sparse-checkout: .github
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/**
+            /.gitattributes
+            /.gitignore
+            /python/mozbuild/**
+            /python/mozboot/**
+            /testing/mozbase/mozfile/**
+            /browser/base/content/test/performance/browser.toml
+            /browser/components/tabbrowser/test/browser/tabs/browser.toml
+            /xpcom/tests/unit/xpcshell.toml
+            /testing/mozbase/moz.build
+            /testing/mozbase/setup_development.py
+            /testing/mochitest/runtests.py
+            /testing/xpcshell/runxpcshelltests.py
+            /testing/xpcshell/xpcshellcommandline.py
+            /third_party/python/packaging/**
+            /third_party/python/six/**
       - name: Check generated profiles and source/profdata negative contracts
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: >-
+            python/mozbuild:python/mozboot:testing/mozbase/mozfile:third_party/python/packaging:third_party/python/six
         run: |
           mkdir -p "$RUNNER_TEMP/qa3-runtime"
           set +e
-          python3 -B -m unittest discover -s .github/workflows/scripts \
-          -p 'test_qa3_*.py' -v > "$RUNNER_TEMP/qa3-runtime/contracts.log" 2>&1
+          python3 -B - <<'PY' > "$RUNNER_TEMP/qa3-runtime/contracts.log" 2>&1
+          import sys
+          import unittest
+          suite = unittest.defaultTestLoader.discover(
+              '.github/workflows/scripts', pattern='test_qa3_*.py')
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          sys.exit(0 if result.wasSuccessful() and result.testsRun > 0
+                   and not result.skipped else 1)
+          PY
           status=$?
           printf '%s\n' "$status" > "$RUNNER_TEMP/qa3-runtime/contracts.exit-code"
           cat "$RUNNER_TEMP/qa3-runtime/contracts.log"
@@ -37,10 +65,13 @@ jobs:
         if: always()
         env:
           QA3_RUNTIME_HEAD: ${{ github.sha }}
-        run: >-
-          python3 -B .github/workflows/scripts/qa3_source_cohort.py
-          --expected-runtime "$QA3_RUNTIME_HEAD"
-          --output "$RUNNER_TEMP/qa3-runtime/preflight.json"
+        run: |
+          status=0
+          python3 -B .github/workflows/scripts/qa3_source_cohort.py \
+            --expected-runtime "$QA3_RUNTIME_HEAD" \
+            --output "$RUNNER_TEMP/qa3-runtime/preflight.json" || status=$?
+          cat "$RUNNER_TEMP/qa3-runtime/preflight.json"
+          exit "$status"
       - name: Preserve shadow preflight
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

@@ -19,6 +19,16 @@ if [[ ! "$MOZ_BUILD_DATE" =~ ^[0-9]{14}$ ]]; then
 fi
 export MOZ_BUILD_DATE
 
+if [[ "${QA3_KEEP_CARGO_FOR_TEST_PACKAGING:-0}" == "1" ]]; then
+  if [[ "$PLATFORM/$ARCH" != "linux/x86_64" || -n "$PGO_MODE" ]]; then
+    echo "Cargo retention requires the opt-in native Linux x64 non-PGO test route." >&2
+    exit 1
+  fi
+elif [[ "${QA3_KEEP_CARGO_FOR_TEST_PACKAGING:-0}" != "0" ]]; then
+  echo "Invalid opt-in test packaging Cargo retention flag." >&2
+  exit 1
+fi
+
 export MOZ_NUM_JOBS=$(( $(nproc) * 3 / 4 ))
 if [[ "$PLATFORM" == "linux" ]]; then
   sudo apt-get update -y
@@ -52,7 +62,9 @@ else
   nice -n 10 ./mach build --jobs=$MOZ_NUM_JOBS
   ./mach package
 fi
-rm -rf ~/.cargo
+if [[ "${QA3_KEEP_CARGO_FOR_TEST_PACKAGING:-0}" != "1" ]]; then
+  rm -rf ~/.cargo
+fi
 
 # Artifact packaging. The primary artifact is a consolidated bundle whose
 # package remains at the artifact root for compatibility with existing users.
