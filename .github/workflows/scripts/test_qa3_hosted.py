@@ -49,6 +49,49 @@ PHASES = [
 ]
 
 
+def loopback_network(fallbacks=False):
+    links = [{
+        "ifindex": 1, "ifname": "lo", "link_type": "loopback",
+        "flags": ["LOOPBACK", "UP", "LOWER_UP"], "operstate": "UNKNOWN",
+    }]
+    addresses = [{
+        "ifindex": 1, "ifname": "lo", "link_type": "loopback",
+        "addr_info": [
+            {"family": "inet", "local": "127.0.0.1", "prefixlen": 8,
+             "scope": "host"},
+            {"family": "inet6", "local": "::1", "prefixlen": 128,
+             "scope": "host"},
+        ],
+    }]
+    if fallbacks:
+        for index, (name, (kind, link_type)) in enumerate(
+            boundary.FALLBACK_TUNNELS.items(), 2
+        ):
+            data = {"local": "any", "remote": "any", "ttl": 0}
+            if name == "sit0":
+                data.update(ttl=64, prefix="2002::", prefixlen=16)
+            links.append({
+                "ifindex": index, "ifname": name, "link_type": link_type,
+                "flags": ["NOARP"], "operstate": "DOWN", "link_index": 0,
+                "linkinfo": {"info_kind": kind, "info_data": data},
+            })
+            addresses.append({
+                "ifindex": index, "ifname": name, "link_type": link_type,
+                "addr_info": [],
+            })
+    return {
+        "queryErrors": {}, "links": links, "addresses": addresses,
+        "ipv4Routes": [
+            {"type": "local", "dst": "127.0.0.0/8", "dev": "lo",
+             "table": "local", "scope": "host", "prefsrc": "127.0.0.1"},
+            {"type": "broadcast", "dst": "127.255.255.255", "dev": "lo",
+             "table": "local", "scope": "link", "prefsrc": "127.0.0.1"},
+        ],
+        "ipv6Routes": [{"type": "local", "dst": "::1", "dev": "lo",
+                        "table": "local"}],
+    }
+
+
 ORIGINAL_BUILD_STEP_DIGESTS = {
     "Validate build identity": "1db4d544a310a669ba8ecd55bf89e33c83a6d121ee13e12ff254b87f58490dc0",
     "Setup Node.js": "849ad66f6e99d7d823c487f689dbec3b3813e38283f197decfeb11205f87746d",
@@ -1107,6 +1150,7 @@ class HostedBoundaries(unittest.TestCase):
             boundary.verify_worker(spec)
 
     def worker_verification(self, *, visible=False, interfaces=None, readable=None):
+        network = loopback_network()
         spec = {
             "uid": 900,
             "gid": 901,
@@ -1147,6 +1191,13 @@ class HostedBoundaries(unittest.TestCase):
             mock.patch.object(
                 boundary.socket, "if_nameindex",
                 return_value=[(1, "lo")] if interfaces is None else interfaces,
+            ),
+            mock.patch.object(
+                boundary, "capture_ip",
+                side_effect=lambda arguments, maximum: json.dumps(network[{
+                    "-d": "links", "addr": "addresses",
+                    "-4": "ipv4Routes", "-6": "ipv6Routes",
+                }[arguments[0]]]).encode(),
             ),
             mock.patch.object(
                 Path, "read_text", side_effect=lambda path, **kwargs: proc[str(path)],
@@ -1310,6 +1361,159 @@ class HostedBoundaries(unittest.TestCase):
             ValueError
         ):
             hosted.artifact_storage_budget(primary, output)
+
+
+class WorkerNetwork(unittest.TestCase):
+    def accepted(self, value, interfaces=None):
+        if interfaces is None:
+            interfaces = [(row["ifindex"], row["ifname"]) for row in value["links"]]
+        return all(boundary.network_checks(value, interfaces).values())
+
+    def test_loopback_and_inactive_kernel_fallbacks_are_accepted(self):
+        self.assertTrue(self.accepted(loopback_network()))
+        self.assertTrue(self.accepted(loopback_network(fallbacks=True)))
+
+    def test_unknown_down_devices_and_wrong_fallback_types_are_rejected(self):
+        for name, kind, link_type in (
+            ("eth0", "veth", "ether"),
+            ("tunl7", "ipip", "ipip"),
+            ("tunl0", "veth", "ether"),
+            ("tunl0", "ipip", "ether"),
+            ("ip6gre0", "ip6gre", "tunnel6"),
+        ):
+            value = loopback_network(fallbacks=True)
+            row = value["links"][1]
+            row.update(ifname=name, link_type=link_type)
+            row["linkinfo"]["info_kind"] = kind
+            value["addresses"][1].update(ifname=name, link_type=link_type)
+            with self.subTest(name=name, kind=kind, link_type=link_type):
+                self.assertFalse(self.accepted(value))
+
+    def test_up_or_configured_fallbacks_are_rejected(self):
+        for target, field, value in (
+            ("link", "flags", ["NOARP", "UP"]),
+            ("link", "flags", ["NOARP", "LOWER_UP"]),
+            ("link", "operstate", "UNKNOWN"),
+            ("link", "master", "lo"),
+            ("link", "link_index", 1),
+            ("link", "link_netnsid", 0),
+            ("data", "local", "192.0.2.1"),
+            ("data", "remote", "192.0.2.2"),
+            ("data", "link", "lo"),
+            ("data", "external", True),
+            ("data", "encap", "fou"),
+            ("data", "ikey", "0.0.0.1"),
+            ("data", "fwmark", "0x1"),
+            ("data", "encap_dport", 1234),
+        ):
+            fixture = loopback_network(fallbacks=True)
+            row = fixture["links"][1]
+            selected = row if target == "link" else row["linkinfo"]["info_data"]
+            selected[field] = value
+            with self.subTest(target=target, field=field, value=value):
+                self.assertFalse(self.accepted(fixture))
+
+    def test_non_loopback_addresses_and_routes_are_rejected(self):
+        address = {"family": "inet", "local": "192.0.2.1", "prefixlen": 24,
+                   "scope": "global"}
+        for index in (0, 1):
+            value = loopback_network(fallbacks=True)
+            value["addresses"][index]["addr_info"].append(address)
+            self.assertFalse(self.accepted(value))
+        for field, route in (
+            ("ipv4Routes", {"dst": "default", "dev": "lo"}),
+            ("ipv4Routes", {"dst": "192.0.2.0/24", "dev": "lo", "table": 100}),
+            ("ipv4Routes", {"dst": "127.0.0.1", "dev": "tunl0"}),
+            ("ipv4Routes", {"dst": "127.0.0.1", "dev": "lo",
+                            "gateway": "192.0.2.2"}),
+            ("ipv4Routes", {"dst": "127.0.0.1", "dev": "lo", "multipath": []}),
+            ("ipv6Routes", {"dst": "ff00::/8", "dev": "lo"}),
+        ):
+            value = loopback_network(fallbacks=True)
+            value[field].append(route)
+            with self.subTest(route=route):
+                self.assertFalse(self.accepted(value))
+
+    def test_driver_default_6rd_prefix_is_allowed_but_configured_6rd_is_rejected(self):
+        value = loopback_network(fallbacks=True)
+        self.assertTrue(self.accepted(value))
+        for field, configured in (
+            ("prefix", "2001:db8::"), ("prefixlen", 32),
+            ("relay_prefix", "192.0.2.0"), ("relay_prefixlen", 24),
+        ):
+            fixture = copy.deepcopy(value)
+            fixture["links"][2]["linkinfo"]["info_data"][field] = configured
+            with self.subTest(field=field):
+                self.assertFalse(self.accepted(fixture))
+
+    def test_incomplete_inventory_and_missing_loopback_are_rejected(self):
+        for field in ("flags", "link_type", "operstate"):
+            value = loopback_network()
+            del value["links"][0][field]
+            self.assertFalse(self.accepted(value))
+        value = loopback_network(fallbacks=True)
+        del value["links"][1]["linkinfo"]["info_data"]["remote"]
+        self.assertFalse(self.accepted(value))
+        value = loopback_network()
+        value["addresses"][0]["addr_info"].pop()
+        self.assertFalse(self.accepted(value))
+        self.assertFalse(self.accepted(loopback_network(), [(1, "lo"), (2, "eth0")]))
+        value = loopback_network()
+        value["queryErrors"]["links"] = "failed"
+        self.assertFalse(self.accepted(value))
+
+    def test_network_queries_are_all_table_and_failures_are_diagnostic(self):
+        value = loopback_network(fallbacks=True)
+        answers = [value[key] for key in (
+            "links", "addresses", "ipv4Routes", "ipv6Routes"
+        )]
+        with mock.patch.object(
+            boundary, "capture_ip",
+            side_effect=[json.dumps(row).encode() for row in answers],
+        ) as query, mock.patch("builtins.print") as printer:
+            observation = boundary.worker_network(
+                [(row["ifindex"], row["ifname"]) for row in value["links"]]
+            )
+        self.assertTrue(all(observation["checks"].values()))
+        self.assertEqual(
+            [call.args[0] for call in query.call_args_list],
+            [["-d", "link", "show"], ["addr", "show"],
+             ["-4", "route", "show", "table", "all"],
+             ["-6", "route", "show", "table", "all"]],
+        )
+        self.assertLessEqual(
+            len(printer.call_args.args[0].encode()), boundary.MAX_NETWORK_JSON
+        )
+        with mock.patch.object(
+            boundary, "capture_ip", side_effect=FileNotFoundError(errno.ENOENT, "ip")
+        ), mock.patch("builtins.print") as printer:
+            observation = boundary.worker_network([(1, "lo")])
+        self.assertFalse(any(observation["checks"].values()))
+        self.assertEqual(observation["queryErrors"]["links"]["errno"], errno.ENOENT)
+        self.assertEqual(json.loads(printer.call_args.args[0]), observation)
+
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux subprocess pipes")
+    def test_capture_ip_clean_environment_and_output_timeout_bounds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fake = Path(temporary) / "ip"
+            fake.write_text(
+                "#!/usr/bin/python3\nimport os, sys\n"
+                "assert sys.argv[1] == '-j'\n"
+                "assert set(os.environ) <= {'PATH','LANG','LC_ALL'}\n"
+                "sys.stdout.write('[]')\n"
+            )
+            fake.chmod(0o700)
+            with (
+                mock.patch.object(Path, "resolve", return_value=fake),
+                mock.patch.object(boundary, "protected", side_effect=lambda path: path),
+            ):
+                self.assertEqual(boundary.capture_ip(["link", "show"], 100), b"[]")
+                fake.write_text("#!/usr/bin/python3\nprint('x' * 10000)\n")
+                with self.assertRaisesRegex(ValueError, "output budget exceeded"):
+                    boundary.capture_ip(["link", "show"], 100)
+                fake.write_text("#!/usr/bin/python3\nimport time\ntime.sleep(10)\n")
+                with self.assertRaisesRegex(ValueError, "query timeout"):
+                    boundary.capture_ip(["link", "show"], 100)
 
 
 class OriginalConsumerEvidence(unittest.TestCase):

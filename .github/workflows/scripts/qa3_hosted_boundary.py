@@ -5,16 +5,19 @@
 
 import argparse
 import errno
+import ipaddress
 import json
 import os
 import pwd
 import re
+import selectors
 import shutil
 import signal
 import socket
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -52,6 +55,13 @@ METADATA = (
     ".github/qa/linux-proof-plan.json",
 )
 MAX_EXPORT = 128 * 1024**2
+MAX_NETWORK_JSON = 16384
+FALLBACK_TUNNELS = {
+    "tunl0": ("ipip", "ipip"),
+    "sit0": ("sit", "sit"),
+    "ip6tnl0": ("ip6tnl", "tunnel6"),
+    "ip6gre0": ("ip6gre", "gre6"),
+}
 
 
 def protected(path):
@@ -152,8 +162,220 @@ def service_command(spec, operation="worker"):
     ]
 
 
+def capture_ip(arguments, maximum):
+    executable = protected(Path("/usr/sbin/ip").resolve(strict=True))
+    require(executable.is_file(), "network query executable is not a file")
+    process = subprocess.Popen(
+        [str(executable), "-j", *arguments],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
+    )
+    output = [bytearray(), bytearray()]
+    deadline = time.monotonic() + 3
+    try:
+        with selectors.DefaultSelector() as selector:
+            for index, pipe in enumerate((process.stdout, process.stderr)):
+                os.set_blocking(pipe.fileno(), False)
+                selector.register(pipe, selectors.EVENT_READ, index)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                require(remaining > 0, "network query timeout")
+                for key, _ in selector.select(min(remaining, 0.1)):
+                    block = os.read(key.fileobj.fileno(), 4096)
+                    if not block:
+                        selector.unregister(key.fileobj)
+                        continue
+                    require(
+                        sum(map(len, output)) + len(block) <= maximum,
+                        "network query output budget exceeded",
+                    )
+                    output[key.data].extend(block)
+            remaining = deadline - time.monotonic()
+            require(remaining > 0, "network query timeout")
+            returncode = process.wait(timeout=remaining)
+        require(returncode == 0, "network query nonzero exit " + str(returncode))
+        require(not output[1], "network query reported stderr")
+        return bytes(output[0])
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=3)
+        process.stdout.close()
+        process.stderr.close()
+
+
+def network_checks(value, interfaces):
+    checks = {name: False for name in (
+        "completeInventory", "loopbackActive", "fallbackTunnelsInactive",
+        "loopbackAddressesOnly", "loopbackRoutesOnly",
+    )}
+    try:
+        require(not value["queryErrors"], "network queries failed")
+        links, addresses = value["links"], value["addresses"]
+        require(
+            isinstance(links, list) and isinstance(addresses, list)
+            and 1 <= len(links) <= 5 and len(addresses) == len(links)
+            and all(isinstance(row, dict) for row in [*links, *addresses]),
+            "invalid network inventory",
+        )
+        identities = [(row["ifindex"], row["ifname"]) for row in links]
+        require(
+            all(type(index) is int and index > 0 and isinstance(name, str)
+                for index, name in identities)
+            and len(set(identities)) == len(identities)
+            and len({name for _, name in identities}) == len(identities)
+            and len({index for index, _ in identities}) == len(identities)
+            and sorted(identities) == sorted(interfaces)
+            and sorted(identities) == sorted(
+                (row["ifindex"], row["ifname"]) for row in addresses
+            ), "inconsistent network inventory",
+        )
+        checks["completeInventory"] = True
+        for row in links:
+            flags = row["flags"]
+            require(
+                isinstance(flags, list) and all(isinstance(f, str) for f in flags),
+                "invalid interface flags",
+            )
+            if row["ifname"] == "lo":
+                require(
+                    row["ifindex"] == 1 and row["link_type"] == "loopback"
+                    and {"LOOPBACK", "UP", "LOWER_UP"} <= set(flags)
+                    and row["operstate"] in {"UP", "UNKNOWN"}
+                    and "master" not in row and "linkinfo" not in row,
+                    "loopback is not active",
+                )
+                checks["loopbackActive"] = True
+                continue
+            kind, link_type = FALLBACK_TUNNELS[row["ifname"]]
+            info = row["linkinfo"]
+            data = info["info_data"]
+            require(
+                row["link_type"] == link_type and info["info_kind"] == kind
+                and isinstance(data, dict)
+                and not {"UP", "LOWER_UP", "RUNNING", "LOOPBACK"} & set(flags)
+                and row["operstate"] == "DOWN"
+                and "master" not in row and "link_netnsid" not in row
+                and row.get("link_index", 0) == 0
+                and data["local"] == data["remote"] == "any"
+                and "link" not in data and not data.get("external", False)
+                and data.get("encap", "none") == "none"
+                and all(data.get(key, 0) in {0, "0", "0x0", "0.0.0.0"}
+                        for key in ("ikey", "okey", "fwmark", "encap_sport",
+                                    "encap_dport")),
+                "configured or active fallback tunnel",
+            )
+            require(
+                ("prefix" not in data and "prefixlen" not in data)
+                or (kind == "sit" and data["prefix"] == "2002::"
+                    and data["prefixlen"] == 16),
+                "non-default fallback 6rd prefix",
+            )
+            require(
+                data.get("relay_prefix", "0.0.0.0") == "0.0.0.0"
+                and data.get("relay_prefixlen", 0) == 0,
+                "configured fallback 6rd relay",
+            )
+        checks["fallbackTunnelsInactive"] = True
+        loopback_addresses = set()
+        for row in addresses:
+            entries = row["addr_info"]
+            require(isinstance(entries, list), "invalid address inventory")
+            if row["ifname"] != "lo":
+                require(not entries, "non-loopback address")
+                continue
+            require(row["link_type"] == "loopback", "wrong loopback address device")
+            for address in entries:
+                local = ipaddress.ip_interface(
+                    address["local"] + "/" + str(address["prefixlen"])
+                )
+                require(
+                    address["scope"] == "host" and "peer" not in address
+                    and (
+                        (address["family"] == "inet" and local.version == 4
+                         and local.network.subnet_of(
+                             ipaddress.ip_network("127.0.0.0/8")
+                         ))
+                        or (address["family"] == "inet6" and str(local) == "::1/128")
+                    ),
+                    "non-loopback address",
+                )
+                loopback_addresses.add(str(local))
+        require(
+            {"127.0.0.1/8", "::1/128"} <= loopback_addresses,
+            "IPv4 or IPv6 loopback address missing",
+        )
+        checks["loopbackAddressesOnly"] = True
+        for field, version, loopback in (
+            ("ipv4Routes", 4, "127.0.0.0/8"),
+            ("ipv6Routes", 6, "::1/128"),
+        ):
+            routes = value[field]
+            require(isinstance(routes, list) and routes, "loopback routes missing")
+            for route in routes:
+                destination = ipaddress.ip_network(route["dst"], strict=False)
+                require(
+                    route["dev"] == "lo" and destination.version == version
+                    and destination.subnet_of(ipaddress.ip_network(loopback))
+                    and route.get("type", "unicast") in {
+                        "local", "broadcast", "unicast"
+                    }
+                    and not {"gateway", "via", "multipath", "nexthops", "nhid",
+                             "encap"} & route.keys()
+                    and all(ipaddress.ip_address(route[key]).is_loopback
+                            for key in ("prefsrc", "src") if key in route),
+                    "non-loopback route",
+                )
+        checks["loopbackRoutesOnly"] = True
+    except (KeyError, TypeError, ValueError, AttributeError):
+        pass
+    return checks
+
+
+def worker_network(interfaces):
+    value = {"schema": "qa3-worker-network-v1", "queryErrors": {}}
+    used = 0
+    for name, arguments in (
+        ("links", ["-d", "link", "show"]),
+        ("addresses", ["addr", "show"]),
+        ("ipv4Routes", ["-4", "route", "show", "table", "all"]),
+        ("ipv6Routes", ["-6", "route", "show", "table", "all"]),
+    ):
+        if value["queryErrors"]:
+            value[name] = None
+            continue
+        try:
+            data = capture_ip(arguments, MAX_NETWORK_JSON - used)
+            used += len(data)
+            value[name] = json.loads(data)
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            value[name] = None
+            value["queryErrors"][name] = {
+                "type": type(exc).__name__, "errno": getattr(exc, "errno", None),
+                "message": str(exc)[:256],
+            }
+    value["checks"] = network_checks(value, interfaces)
+    value["nativeExecutionObservation"] = "NOT_CHECKED"
+    value["publicationAuthorized"] = False
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    if len(encoded.encode()) > MAX_NETWORK_JSON:
+        value = {
+            "schema": "qa3-worker-network-v1",
+            "queryErrors": {"diagnostic": "network diagnostic budget exceeded"},
+            "checks": {name: False for name in value["checks"]},
+            "nativeExecutionObservation": "NOT_CHECKED",
+            "publicationAuthorized": False,
+        }
+        encoded = json.dumps(value, sort_keys=True)
+    print(encoded, flush=True)
+    return value
+
+
 def worker_visibility(spec):
     interfaces = socket.if_nameindex()
+    network = worker_network(interfaces)
     process = Path(f"/proc/{spec['controllerPID']}")
     process_reads = {}
     for name in ("status", "cmdline", "environ", "maps"):
@@ -193,7 +415,7 @@ def worker_visibility(spec):
     )
     visible = process.exists()
     checks = {
-        "loopbackOnly": interfaces == [(1, "lo")],
+        "loopbackOnly": all(network["checks"].values()),
         "controllerProcessHidden": not visible,
         "controllerProcessUnreadable": all(
             not item["readable"]
