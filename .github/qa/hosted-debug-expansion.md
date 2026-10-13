@@ -4,7 +4,7 @@ The creation-only campaign uses `codex/qa3-actions-native-proof-qa337-17` at
 frozen revision `5416e40007a9605b68f2046690a27507b2253f33`.
 The original successful campaign remains bound to its own revision and run in
 [the earlier evidence record](hosted-debug-evidence-20261013.md).
-This expanded selection is pending native verification for that frozen revision.
+Native evidence for this expanded selection must remain bound to that frozen revision.
 
 `hosted-linux-debug-plan.json` selects four required Mozilla cases: hidden-window
 existence, mutable arrays, pinned and hidden tabs, and INI parsing. Their minimum
