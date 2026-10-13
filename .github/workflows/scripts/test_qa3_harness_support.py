@@ -57,10 +57,10 @@ class ColdHarnessSupport(unittest.TestCase):
         self.case = {
             "suite": "browser-chrome",
             "archivePath": (
-                "mochitest/browser/browser/base/content/test/performance/"
+                "mochitest/browser/browser/base/content/test/browser-performance/"
                 "browser_hiddenwindow_existence.js"
             ),
-            "manifest": "browser/base/content/test/performance/browser.toml",
+            "manifest": "browser/base/content/test/browser-performance/browser.toml",
         }
         test = self.support / self.case["archivePath"]
         test.parent.mkdir(parents=True)
@@ -175,7 +175,9 @@ class ColdHarnessSupport(unittest.TestCase):
         absolute = str(self.support / self.case["archivePath"])
         self.assertEqual(
             namespace["normalize_paths"](harness, [absolute]),
-            ["browser/base/content/test/performance/browser_hiddenwindow_existence.js"],
+            [
+                "browser/base/content/test/browser-performance/browser_hiddenwindow_existence.js"
+            ],
         )
         self.assertEqual(
             namespace["normalize_paths"](harness, [self.argv(None)[-1]]),
@@ -474,6 +476,70 @@ class XpcshellManifestIdentity(unittest.TestCase):
             )
             self.assertEqual(normalized["id"], "xpcom/tests/unit/" + name)
             self.assertEqual(normalized["manifest"], "xpcom/tests/unit/xpcshell.toml")
+
+    def test_frozen_xpcshell_wrapper_keeps_bound_manifest_and_cleans_owned_temp(self):
+        methods = {
+            node.name: node
+            for node in ast.walk(frozen_harness("testing/xpcshell/runxpcshelltests.py"))
+            if isinstance(node, ast.FunctionDef)
+            and node.name in {"runTests", "removeOwnedTempDir"}
+        }
+        self.assertEqual(set(methods), {"runTests", "removeOwnedTempDir"})
+        namespace = {
+            "os": os,
+            "shutil": shutil,
+            "Namespace": argparse.Namespace,
+            "XPCShellTestThread": object(),
+            "mkdtemp": lambda **kwargs: tempfile.mkdtemp(dir=self.temp.name, **kwargs),
+        }
+        exec(
+            compile(
+                ast.Module(body=list(methods.values()), type_ignores=[]),
+                "frozen-runxpcshelltests.py",
+                "exec",
+            ),
+            namespace,
+        )
+        desktop = type(
+            "FrozenXpcshell", (), {name: namespace[name] for name in methods}
+        )
+        for result, expected_exit in ((True, 0), (False, 1), (4, 4), (None, None)):
+            with self.subTest(result=result):
+                options, factory, _, harness = self.invocation(
+                    "test_nsIMutableArray.js"
+                )
+                options = argparse.Namespace(**vars(options))
+                harness.parser_desktop = lambda: SimpleNamespace(
+                    parse_args=lambda: options
+                )
+                runner = desktop()
+                runner.log = SimpleNamespace(info=mock.Mock())
+                runner._runTests = mock.Mock(return_value=result)
+                if result is None:
+                    runner._runTests.side_effect = ValueError("original native failure")
+                harness.XPCShellTests = lambda log: runner
+                before = capture_material_tree(self.support)
+                with mock.patch.dict(
+                    os.environ, {"QA3_XPCSHELL_SUPPORT": str(self.support)}, clear=True
+                ):
+                    if result is None:
+                        with self.assertRaisesRegex(
+                            ValueError, "original native failure"
+                        ):
+                            xpcshell_entry.run(harness)
+                    else:
+                        self.assertEqual(xpcshell_entry.run(harness), expected_exit)
+                factory.assert_called_once_with(
+                    [str(self.manifest)], strict=True, rootdir=str(self.root)
+                )
+                runner._runTests.assert_called_once()
+                consumed = runner._runTests.call_args.args[0]
+                self.assertIs(consumed["manifest"], options.manifest)
+                self.assertIs(consumed["retry"], False)
+                self.assertEqual(consumed["testPaths"], options.testPaths)
+                self.assertTrue(runner.ownsTempDir)
+                self.assertFalse(Path(runner.tempDir).exists())
+                self.assertEqual(capture_material_tree(self.support), before)
 
     def test_missing_extra_relative_and_foreign_selectors_are_rejected(self):
         for change in ("missing", "extra", "relative", "foreign"):

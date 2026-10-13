@@ -36,7 +36,7 @@ jobs:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             /.github/**
-            /browser/base/content/test/performance/browser.toml
+            /browser/base/content/test/browser-performance/browser.toml
             /browser/components/tabbrowser/test/browser/tabs/browser.toml
             /xpcom/tests/unit/xpcshell.toml
             /testing/mozbase/moz.build

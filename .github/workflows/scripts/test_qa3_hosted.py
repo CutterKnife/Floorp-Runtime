@@ -1795,8 +1795,8 @@ class OriginalConsumerEvidence(unittest.TestCase):
                     "xpcshell/xpcshellcommandline.py",
                 ),
                 (
-                    "browser/base/content/test/performance/head.js",
-                    "mochitest/browser/browser/base/content/test/performance/head.js",
+                    "browser/base/content/test/browser-performance/head.js",
+                    "mochitest/browser/browser/base/content/test/browser-performance/head.js",
                 ),
                 (
                     "xpcom/tests/unit/head_xpcom.js",
@@ -2564,7 +2564,7 @@ class HostedMozbaseArchiveShape(unittest.TestCase):
         metadata = {
             "testing/mozbase/moz.build",
             "testing/mozbase/setup_development.py",
-            "browser/base/content/test/performance/browser.toml",
+            "browser/base/content/test/browser-performance/browser.toml",
             "browser/components/tabbrowser/test/browser/tabs/browser.toml",
             "xpcom/tests/unit/xpcshell.toml",
         }

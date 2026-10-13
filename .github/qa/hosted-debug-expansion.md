@@ -1,9 +1,10 @@
 # Fixed hosted Debug selection expansion
 
-The next creation-only campaign uses `codex/qa3-actions-native-proof-qa337-17`.
+The creation-only campaign uses `codex/qa3-actions-native-proof-qa337-17` at
+frozen revision `5416e40007a9605b68f2046690a27507b2253f33`.
 The original successful campaign remains bound to its own revision and run in
 [the earlier evidence record](hosted-debug-evidence-20261013.md).
-This expanded selection is pending native verification at this revision.
+This expanded selection is pending native verification for that frozen revision.
 
 `hosted-linux-debug-plan.json` selects four required Mozilla cases: hidden-window
 existence, mutable arrays, pinned and hidden tabs, and INI parsing. Their minimum
@@ -17,8 +18,26 @@ Source pins cover the added test bytes, tab manifest and its support files, the
 tab head and testing module, and all 33 Linux INI fixtures. The INI case writes
 temporary files inside the isolated native state and removes them on success.
 The entire support inventory must still match after execution; any remaining
-file or modified input fails. The private `linux-proof-plan.json` and private
-two-case recipe are unchanged and do not claim expanded qualification.
+file or modified input fails. The private `linux-proof-plan.json` retains its
+two-case selection and does not claim expanded qualification.
+
+## Firefox 158 source compatibility
+
+The current private and hosted plans follow the upstream rename from
+`browser/base/content/test/performance` to `browser-performance`. The required
+hidden-window test, manifest and head retain identical bytes. Its assertion
+floor and the other required cases remain unchanged. Source pins additionally
+track the current test-package targets, archive recipe, both Mozilla harnesses
+and tab manifest.
+
+The xpcshell adapter still calls the public `runTests` API. A contract executes
+the current frozen wrapper and verifies the bound manifest, disabled retry,
+ordinary exit mapping and cleanup of its owned temporary directory, including
+an original failure. These source contracts do not execute native tests.
+The Firefox 157 campaign above remains bound to its frozen revision; it is not
+native evidence for the Firefox 158 source or subsequent integration commits.
+
+## Original campaign resource limits
 
 The producer remains on a public standard GitHub-hosted Ubuntu runner, whose
 compute is free under [GitHub's public repository billing policy](https://docs.github.com/en/actions/concepts/billing-and-usage). The
