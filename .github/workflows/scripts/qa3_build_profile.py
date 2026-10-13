@@ -101,6 +101,33 @@ def enable_debug_tests(text, debug, pgo):
     return result
 
 
+def require_hosted_test_profile(expected):
+    if (
+        expected["target"] != "x86_64-pc-linux-gnu"
+        or not expected["qualificationEligible"]
+    ):
+        raise ValueError(
+            "hosted test support requires canonical native Linux x64 Debug"
+        )
+
+
+def enable_hosted_test_support(text, expected):
+    require_hosted_test_profile(expected)
+    options = ac_options(text)
+    for name in ("js-shell", "gtest-in-build"):
+        present = [
+            value
+            for value in options
+            if value.startswith(("--enable-" + name, "--disable-" + name))
+        ]
+        wanted = "--enable-" + name
+        if present and present != [wanted]:
+            raise ValueError("conflicting hosted test staging option: " + name)
+        if not present:
+            text = text.rstrip("\n") + "\nac_add_options " + wanted + "\n"
+    return text
+
+
 def verify_config(text, expected):
     options = ac_options(text)
     if [v for v in options if v.startswith("--target=")] != [
@@ -155,6 +182,7 @@ def main():
     parser.add_argument("--mode", default="")
     parser.add_argument("--artifact", default="")
     parser.add_argument("--allow-legacy-debug-pgo", action="store_true")
+    parser.add_argument("--hosted-test-support", action="store_true")
     args = parser.parse_args()
     try:
         expected = profile(
@@ -166,6 +194,8 @@ def main():
             args.artifact,
             allow_legacy_debug_pgo=args.allow_legacy_debug_pgo,
         )
+        if args.hosted_test_support:
+            require_hosted_test_profile(expected)
         if args.validate_inputs:
             if args.debug and args.pgo:
                 print(
@@ -176,6 +206,8 @@ def main():
         text = args.config.read_text()
         updated = enable_debug_tests(text, args.debug, args.pgo)
         verify_config(updated, expected)
+        if args.hosted_test_support:
+            updated = enable_hosted_test_support(updated, expected)
         if updated != text:
             args.config.write_text(updated)
     except (OSError, ValueError) as error:

@@ -1,0 +1,130 @@
+---
+# SPDX-License-Identifier: MPL-2.0
+
+name: QA3 Hosted Debug to Cold Consumer
+
+"on":
+  push:
+    branches: [codex/qa3-actions-native-proof-qa337-17]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  contracts:
+    if: >-
+      github.repository == 'Floorp-Projects/Floorp-Runtime' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/codex/qa3-actions-native-proof-qa337-17'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Reject updates, deletion and reruns
+        run: |
+          python3.12 - <<'PY'
+          import json, os
+          from pathlib import Path
+          event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+          if (event.get('created') is not True or event.get('deleted') is not False
+                  or os.environ.get('GITHUB_RUN_ATTEMPT') != '1'):
+              raise ValueError('original branch creation attempt required')
+          PY
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/**
+            /browser/base/content/test/browser-performance/browser.toml
+            /browser/components/tabbrowser/test/browser/tabs/browser.toml
+            /xpcom/tests/unit/xpcshell.toml
+            /testing/mozbase/moz.build
+            /testing/mozbase/setup_development.py
+      - name: Fail-closed local contracts
+        run: python3.12 -m unittest discover -s .github/workflows/scripts -p test_qa3_hosted.py -v
+
+  context:
+    needs: contracts
+    uses: ./.github/workflows/resolve-build-context.yml
+    with:
+      require_run_metadata: true
+
+  boundary-preflight:
+    needs: contracts
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact boundary recipe
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github
+
+      - name: Probe dedicated consumer boundary
+        run: |
+          sudo -n /usr/bin/python3.12 -I - \
+            "$GITHUB_WORKSPACE" "$GITHUB_SHA" "$RUNNER_TEMP/qa3-boundary-probe" <<'PY'
+          import os, re, stat, subprocess, sys
+          from pathlib import Path
+          source = Path(sys.argv[1]).resolve(strict=True)
+          sha = sys.argv[2]
+          if not re.fullmatch('[0-9a-f]{40}', sha):
+              raise ValueError('invalid original Runtime revision')
+          env = {'PATH': '/usr/bin:/bin', 'GIT_CONFIG_NOSYSTEM': '1',
+                 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_NO_LAZY_FETCH': '1',
+                 'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_TERMINAL_PROMPT': '0'}
+          git = ['/usr/bin/git', '-C', str(source), '-c', 'safe.directory=' + str(source),
+                 '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null']
+          if subprocess.check_output(git + ['rev-parse', 'HEAD'], env=env, timeout=30).decode().strip() != sha:
+              raise ValueError('checkout differs from original Runtime revision')
+          parent = Path('/var/lib')
+          for ancestor in (parent, *parent.parents):
+              info = ancestor.lstat()
+              if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                  raise ValueError('unsafe bootstrap ancestor')
+          staging = parent / ('qa3-boundary-bootstrap-' + sha)
+          staging.mkdir(mode=0o755)
+          names = ('qa3_hosted.py', 'qa3_hosted_support.py', 'qa3_hosted_boundary.py',
+                   'qa3_native_io.py', 'qa3_native_transport.py', 'qa3_mozlog.py',
+                   'qa3_source_cohort.py', 'qa3_build_profile.py', 'runtime_build_context.py',
+                   'qa3_xpcshell_entry.py', 'qa3_browser_entry.py')
+          for name in names:
+              relative = '.github/workflows/scripts/' + name
+              raw = subprocess.check_output(git + ['cat-file', 'blob', sha + ':' + relative],
+                                            env=env, timeout=30)
+              if raw != (source / relative).read_bytes():
+                  raise ValueError('boundary code differs from raw Runtime blob')
+              descriptor = os.open(staging / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o444)
+              with os.fdopen(descriptor, 'wb') as output:
+                  output.write(raw)
+          os.execve('/usr/bin/python3.12', ['/usr/bin/python3.12', '-I',
+                    str(staging / 'qa3_hosted_boundary.py'), 'probe',
+                    '--recipe', str(source), '--output', sys.argv[3]],
+                    {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
+          PY
+
+      - name: Upload bounded boundary diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa3-boundary-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/qa3-boundary-probe/*.json
+            ${{ runner.temp }}/qa3-boundary-probe/*.stdout
+            ${{ runner.temp }}/qa3-boundary-probe/*.stderr
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  runtime:
+    needs: [contracts, context, boundary-preflight]
+    uses: ./.github/workflows/common-build.yml
+    with:
+      platform: linux
+      arch: x86_64
+      debug: true
+      pgo: false
+      qa3-debug-tests: true
+      MOZ_BUILD_DATE: ${{ needs.context.outputs.expected-build-id }}
