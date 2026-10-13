@@ -5,10 +5,12 @@
 import builtins
 import ctypes
 import errno
+import hashlib
 import json
 import math
 import os
 import posixpath
+import re
 import select
 import selectors
 import shutil
@@ -258,6 +260,22 @@ def verify_group_limits(
     }
 
 
+def _watched_log_limits(value):
+    if value is None:
+        return {}
+    if type(value) is not dict or len(value) > 8:
+        raise ValueError("invalid watched log limits")
+    for name, maximum in value.items():
+        if (
+            type(name) is not str
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name)
+            or type(maximum) is not int
+            or not 0 < maximum <= MAX_EXPANDED
+        ):
+            raise ValueError("invalid watched log name or byte limit")
+    return dict(value)
+
+
 def _run_owned(
     argv,
     cwd,
@@ -273,6 +291,7 @@ def _run_owned(
     io_budget=None,
     data_limit=MAX_EXPANDED,
     cancelled=lambda: False,
+    watched_logs=None,
 ):
     safe_path(name)
     if "/" in name or not argv or not all(isinstance(x, str) for x in argv):
@@ -280,6 +299,11 @@ def _run_owned(
     logs.mkdir(parents=True, exist_ok=True)
     out = logs / (name + ".stdout")
     err = logs / (name + ".stderr")
+    watched_logs = _watched_log_limits(watched_logs)
+    for filename in watched_logs:
+        if filename in {out.name, err.name, name + ".process.json"}:
+            raise ValueError("watched log collides with owned process evidence")
+    watched_state = {}
     logged = sum(
         p.stat().st_size
         for p in logs.iterdir()
@@ -304,7 +328,7 @@ def _run_owned(
         raise ValueError("required native process limiter missing")
     executed = [
         limiter,
-        f"--as={memory}",
+        *([f"--as={memory}"] if memory is not None else []),
         f"--fsize={MAX_EXPANDED}",
         "--core=0",
         "--",
@@ -316,6 +340,82 @@ def _run_owned(
     cleanup_verified = True
     cleanup_errors = {}
     drain_ready = False
+
+    def check_watched(final=False):
+        for filename, maximum in watched_logs.items():
+            path = logs / filename
+            previous = watched_state.get(filename)
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                if previous is not None or final:
+                    raise ValueError("watched log disappeared or was never created")
+                continue
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError("watched log is not a single regular file")
+            identity = (info.st_dev, info.st_ino)
+            if previous is None:
+                descriptor = os.open(
+                    path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                )
+                try:
+                    held = os.fstat(descriptor)
+                    if (
+                        not stat.S_ISREG(held.st_mode)
+                        or held.st_nlink != 1
+                        or (held.st_dev, held.st_ino) != identity
+                    ):
+                        raise ValueError("watched log changed while opening")
+                except BaseException:
+                    os.close(descriptor)
+                    raise
+                previous = {"identity": identity, "bytes": 0, "descriptor": descriptor}
+                watched_state[filename] = previous
+            if previous is not None and (
+                identity != previous["identity"] or info.st_size < previous["bytes"]
+            ):
+                raise ValueError("watched log was replaced or shrank")
+            growth = info.st_size - (previous["bytes"] if previous else 0)
+            if io_budget and growth:
+                io_budget.consume(growth)
+            previous["bytes"] = info.st_size
+            if info.st_size > maximum:
+                raise ValueError("watched log byte limit exceeded")
+            if minimum_free and shutil.disk_usage(logs).free < minimum_free:
+                raise ValueError("watched log consumed reserved free space")
+
+    def watched_receipt(filename):
+        path = logs / filename
+        expected = watched_state[filename]
+        descriptor = os.dup(expected["descriptor"])
+        with os.fdopen(descriptor, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or (info.st_dev, info.st_ino) != expected["identity"]
+                or info.st_size != expected["bytes"]
+                or info.st_size > watched_logs[filename]
+            ):
+                raise ValueError("watched log changed before receipt")
+            digest = hashlib.sha256()
+            size = 0
+            while block := stream.read(65536):
+                size += len(block)
+                if size > watched_logs[filename]:
+                    raise ValueError("watched log byte limit exceeded while hashing")
+                digest.update(block)
+            after = os.fstat(stream.fileno())
+            if (
+                size != info.st_size
+                or after.st_size != size
+                or after.st_nlink != 1
+                or after.st_mtime_ns != info.st_mtime_ns
+                or after.st_ctime_ns != info.st_ctime_ns
+                or (path.lstat().st_dev, path.lstat().st_ino) != expected["identity"]
+            ):
+                raise ValueError("watched log changed while hashing")
+        return {"bytes": size, "sha256": digest.hexdigest()}
 
     def remember_error(exc, phase):
         nonlocal failure, stop
@@ -343,6 +443,10 @@ def _run_owned(
         with out.open("xb") as stdout, err.open(
             "xb"
         ) as stderr, selectors.DefaultSelector() as selector:
+            for filename in watched_logs:
+                path = logs / filename
+                if path.exists() or path.is_symlink():
+                    raise ValueError("watched log already exists")
             process = subprocess.Popen(
                 executed,
                 cwd=cwd,
@@ -412,6 +516,7 @@ def _run_owned(
                     if minimum_free and shutil.disk_usage(logs).free < minimum_free:
                         stop = stop or "DISK_LIMIT"
                     drain(0.05)
+                    check_watched()
                     if stop:
                         break
             except BaseException as exc:
@@ -425,9 +530,11 @@ def _run_owned(
                         stop_on_cancel()
                     if not drain_ready:
                         time.sleep(wait)
+                        cleanup_call(check_watched, "CLEANUP_WATCHED_LOG")
                         return
                     try:
                         drain(wait)
+                        check_watched()
                     except BaseException as exc:
                         remember_error(exc, "CLEANUP_IO")
                         drain_ready = False
@@ -513,6 +620,24 @@ def _run_owned(
     )
     if leftovers is None or leftovers or not cleanup_verified:
         stop = "CLEANUP_FAILED"
+    if watched_logs and process is not None:
+        cleanup_call(lambda: check_watched(final=True), "WATCHED_LOG_FINAL")
+    watched = (
+        {
+            filename: (
+                cleanup_call(
+                    lambda filename=filename: watched_receipt(filename), "WATCHED_LOG_HASH"
+                )
+                if filename in watched_state
+                else None
+            )
+            for filename in watched_logs
+        }
+        if watched_logs
+        else None
+    )
+    for item in watched_state.values():
+        cleanup_call(lambda item=item: os.close(item["descriptor"]), "WATCHED_LOG_CLOSE")
     result = {
         "name": name,
         "argv": argv,
@@ -524,6 +649,8 @@ def _run_owned(
         "ownedCleanupComplete": bool(process) and cleanup_verified and leftovers == [],
         "stdoutIsData": data_stdout,
     }
+    if watched_logs:
+        result["watchedLogs"] = watched
     if cancelled():
         stop = stop or "CANCELLED"
         result["cancelled"] = True
@@ -568,7 +695,7 @@ def _wait_supervisor(pid, timeout, on_error=None):
     return None
 
 
-def _supervisor_reply(reply, io_budget, expected, allow_nonzero):
+def _supervisor_reply(reply, io_budget, expected, allow_nonzero, watched_logs=None):
     if type(reply) is not dict or set(reply) != {"result", "error", "budgetUsed"}:
         raise ValueError("invalid owned supervisor envelope")
     error = reply["error"]
@@ -585,6 +712,9 @@ def _supervisor_reply(reply, io_budget, expected, allow_nonzero):
             "ownedCleanupComplete",
             "stdoutIsData",
         }
+        watched_logs = _watched_log_limits(watched_logs)
+        if watched_logs:
+            fields.add("watchedLogs")
         if type(result) is not dict or set(result) != fields:
             raise ValueError("invalid owned supervisor result")
         if (
@@ -613,6 +743,21 @@ def _supervisor_reply(reply, io_budget, expected, allow_nonzero):
                 or any(char not in "0123456789abcdef" for char in value)
             ):
                 raise ValueError("invalid owned supervisor stream hash")
+        if watched_logs:
+            watched = result["watchedLogs"]
+            if type(watched) is not dict or set(watched) != set(watched_logs):
+                raise ValueError("owned supervisor changed watched log names")
+            for name, limit in watched_logs.items():
+                item = watched[name]
+                if (
+                    type(item) is not dict
+                    or set(item) != {"bytes", "sha256"}
+                    or type(item["bytes"]) is not int
+                    or not 0 <= item["bytes"] <= limit
+                    or type(item["sha256"]) is not str
+                    or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+                ):
+                    raise ValueError("invalid owned supervisor watched log receipt")
         if expected and any(result[key] != value for key, value in expected.items()):
             raise ValueError("owned supervisor result changed its command")
     else:
@@ -646,7 +791,9 @@ def _supervisor_reply(reply, io_budget, expected, allow_nonzero):
     return result
 
 
-def _supervise(command, timeout, io_budget, *, expected=None, allow_nonzero=False):
+def _supervise(
+    command, timeout, io_budget, *, expected=None, allow_nonzero=False, watched_logs=None
+):
     """Isolate orphan adoption; hard kill/stop recovery needs the external job scope."""
     if (
         signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL
@@ -812,7 +959,7 @@ def _supervise(command, timeout, io_budget, *, expected=None, allow_nonzero=Fals
     if status != 0:
         raise RuntimeError("owned supervisor failed to retain its result")
     return _supervisor_reply(
-        parse_rest_json(bytes(data)), io_budget, expected, allow_nonzero
+        parse_rest_json(bytes(data)), io_budget, expected, allow_nonzero, watched_logs
     )
 
 
@@ -830,7 +977,9 @@ def run_owned(
     data_stdout=False,
     io_budget=None,
     data_limit=MAX_EXPANDED,
+    watched_logs=None,
 ):
+    watched_logs = _watched_log_limits(watched_logs)
     return _supervise(
         lambda cancelled: _run_owned(
             argv,
@@ -847,11 +996,13 @@ def run_owned(
             io_budget,
             data_limit,
             cancelled,
+            watched_logs,
         ),
         timeout,
         io_budget,
         expected={"name": name, "argv": argv, "stdoutIsData": data_stdout},
         allow_nonzero=allow_nonzero,
+        watched_logs=watched_logs,
     )
 
 

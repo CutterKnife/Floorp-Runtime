@@ -418,7 +418,7 @@ jobs:
           names = ('qa3_hosted.py', 'qa3_hosted_support.py', 'qa3_hosted_boundary.py',
                    'qa3_native_io.py', 'qa3_native_transport.py', 'qa3_mozlog.py',
                    'qa3_source_cohort.py', 'qa3_build_profile.py', 'runtime_build_context.py',
-                   'qa3_xpcshell_entry.py')
+                   'qa3_xpcshell_entry.py', 'qa3_browser_entry.py')
           for name in names:
               relative = '.github/workflows/scripts/' + name
               raw = subprocess.check_output(git + ['cat-file', 'blob', sha + ':' + relative],

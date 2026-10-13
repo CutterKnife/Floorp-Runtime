@@ -48,6 +48,7 @@ FILES = (
     "qa3_build_profile.py",
     "runtime_build_context.py",
     "qa3_xpcshell_entry.py",
+    "qa3_browser_entry.py",
 )
 METADATA = (
     ".github/runtime-upstream.json",
@@ -793,6 +794,14 @@ def export_after_stop(root, complete, context):
             "native-1-assertion-canary",
         )
         for suffix in ("stdout", "stderr", "process.json")
+    } | {
+        f"logs/{phase}.mozlog"
+        for phase in (
+            "native-0-required",
+            "native-0-assertion-canary",
+            "native-1-required",
+            "native-1-assertion-canary",
+        )
     }
     rows = []
     total = 0

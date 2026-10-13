@@ -10,6 +10,7 @@ import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import urllib.parse
@@ -47,7 +48,7 @@ from qa3_source_cohort import file_digest, hash_value, verify_patches
 from runtime_build_context import derive_build_id, fetch_actions_run
 
 REPOSITORY = "Floorp-Projects/Floorp-Runtime"
-BRANCH = "codex/qa3-actions-native-proof-qa337-15"
+BRANCH = "codex/qa3-actions-native-proof-qa337-16"
 WORKFLOW = ".github/workflows/qa3-hosted-linux-debug.yml"
 PROFILE = "github-hosted-debug-to-blacksmith-consumer"
 SEED_SHA = "e084ba7bb4b62a0581266319bfefd7f671bdeb3e39e7f7149de9657cb97a718c"
@@ -1308,6 +1309,20 @@ def unpack_wrapper(archive, destination):
                 shutil.copyfileobj(source, sink, 1024**2)
 
 
+def raw_log_identity(path):
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise ValueError("missing complete raw mozlog") from exc
+    require(
+        stat.S_ISREG(info.st_mode)
+        and info.st_nlink == 1
+        and 0 < info.st_size <= 16 * 1024**2,
+        "missing, linked or oversized complete raw mozlog",
+    )
+    return {"bytes": info.st_size, "sha256": file_digest(path)}
+
+
 def consume(inputs, state, recipe, context):
     require(
         os.geteuid() > 0
@@ -1339,7 +1354,7 @@ def consume(inputs, state, recipe, context):
             logs,
             name,
             timeout,
-            memory=14 * GIB,
+            memory=kw.pop("memory", 14 * GIB),
             log_limit=16 * 1024**2,
             **kw,
         )
@@ -1402,6 +1417,7 @@ def consume(inputs, state, recipe, context):
         for canary in (False, True):
             selected = canary_case(case, support, value) if canary else case
             name = f"native-{index}-{'assertion-canary' if canary else 'required'}"
+            raw_log = logs / (name + ".mozlog")
             mochitest_root = None
             copied_bytes = 0
             if selected["suite"] == "browser-chrome":
@@ -1419,6 +1435,7 @@ def consume(inputs, state, recipe, context):
                     app,
                     selected,
                     state / (name + "-profile"),
+                    raw_log=raw_log,
                     mochitest_root=mochitest_root,
                 ),
             ]
@@ -1427,11 +1444,28 @@ def consume(inputs, state, recipe, context):
                     recipe / ".github/workflows/scripts/qa3_xpcshell_entry.py"
                 )
                 env["QA3_XPCSHELL_SUPPORT"] = str(support)
+                env.pop("QA3_MOCHITEST_ROOT", None)
             else:
                 env.pop("QA3_XPCSHELL_SUPPORT", None)
-            result = command(name, argv, 600, allow_nonzero=canary)
+                env["QA3_MOCHITEST_ROOT"] = str(mochitest_root)
+            result = command(
+                name,
+                argv,
+                600,
+                # RLBox reserves 16 GiB of virtual space; the service still caps
+                # physical memory at 14 GiB with swap disabled.
+                memory=None,
+                allow_nonzero=canary,
+                watched_logs={raw_log.name: 16 * 1024**2},
+                io_budget=budget,
+            )
+            raw_identity = raw_log_identity(raw_log)
+            require(
+                result.get("watchedLogs") == {raw_log.name: raw_identity},
+                "supervised raw mozlog differs",
+            )
             verdict = verify_mozlog(
-                logs / (name + ".stdout"), selected, support, result, canary=canary
+                raw_log, selected, support, result, canary=canary
             )
             if mochitest_root is not None:
                 current_bytes = sum(
@@ -1446,6 +1480,10 @@ def consume(inputs, state, recipe, context):
                 "suite": case["suite"],
                 "canary": canary,
                 "process": result,
+                "rawLog": {
+                    "path": "logs/" + raw_log.name,
+                    **raw_identity,
+                },
                 "mozlog": verdict,
             })
     require(
@@ -1520,6 +1558,14 @@ def verify_consumer(output, support, producer, context):
         canary = bool(index % 2)
         selected = canary_case(case, support, producer) if canary else case
         command = value["commands"][index + 3]
+        raw_name = command["name"] + ".mozlog"
+        raw_path = output / "logs" / raw_name
+        identity = raw_log_identity(raw_path)
+        require(
+            item.get("rawLog") == {"path": "logs/" + raw_name, **identity}
+            and command.get("watchedLogs") == {raw_name: identity},
+            "original complete raw mozlog differs",
+        )
         require(
             item["name"] == command["name"]
             and item["suite"] == case["suite"]
@@ -1527,7 +1573,7 @@ def verify_consumer(output, support, producer, context):
             and item["process"] == command
             and item["mozlog"]
             == verify_mozlog(
-                output / "logs" / (command["name"] + ".stdout"),
+                raw_path,
                 selected,
                 support,
                 command,

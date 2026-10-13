@@ -158,7 +158,9 @@ def stage_mochitest(support, destination, budget):
     return destination
 
 
-def harness_argv(python, support, app, case, profile, *, mochitest_root=None):
+def harness_argv(
+    python, support, app, case, profile, *, raw_log, mochitest_root=None
+):
     test = support / case["archivePath"]
     if case["suite"] == "browser-chrome":
         mochitest_root = mochitest_root or support / "mochitest"
@@ -174,13 +176,13 @@ def harness_argv(python, support, app, case, profile, *, mochitest_root=None):
         "--testing-modules-dir",
         str(support / "modules"),
         "--log-raw",
-        "-",
+        str(raw_log),
     ]
     if case["suite"] == "browser-chrome":
         return [
             python,
             "-s",
-            str(mochitest_root / "runtests.py"),
+            str(Path(__file__).resolve().with_name("qa3_browser_entry.py")),
             "--flavor",
             "browser",
             "--appname",
@@ -195,7 +197,7 @@ def harness_argv(python, support, app, case, profile, *, mochitest_root=None):
             "--profile-path",
             str(profile),
             *common,
-            str(test),
+            test.name,
         ]
     if case["suite"] == "xpcshell":
         return [

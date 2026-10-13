@@ -38,9 +38,9 @@ def _tests(value):
 
 def _canary_assertion(entry, suite):
     if suite == "browser-chrome":
-        reason = entry.get("subtest")
-        return isinstance(reason, str) and re.fullmatch(
-            r"QA3_EXPECTED_ASSERTION(?: - .*)?", reason
+        return (
+            entry.get("subtest") == "qa3_expected_assertion"
+            and entry.get("message") == CANARY_REASON
         )
     message = entry.get("message")
     return (

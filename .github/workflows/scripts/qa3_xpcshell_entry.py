@@ -16,6 +16,26 @@ def run(harness):
         or options.interactive
     ):
         raise ValueError("fixed proof requires explicit noninteractive xpcshell helper")
+    root = (
+        Path(os.environ["QA3_XPCSHELL_SUPPORT"]) / "xpcshell/tests"
+    ).resolve(strict=True)
+    if options.manifest is None or len(options.testPaths) != 1:
+        raise ValueError("fixed proof requires one explicit xpcshell test and manifest")
+    manifest = Path(options.manifest).resolve(strict=True)
+    selected = Path(options.testPaths[0])
+    if not selected.is_absolute():
+        raise ValueError("fixed proof requires an absolute installed xpcshell test")
+    selected = selected.resolve(strict=True)
+    if (
+        not manifest.is_relative_to(root)
+        or not manifest.is_file()
+        or not selected.is_file()
+        or selected.parent != manifest.parent
+    ):
+        raise ValueError("xpcshell test and manifest differ from installed suite root")
+    options.manifest = harness.TestManifest(
+        [str(manifest)], strict=True, rootdir=str(root)
+    )
     options.retry = False
     log = harness.commandline.setup_logging("XPCShell", options, {"raw": sys.stdout})
     tests = harness.XPCShellTests(log)

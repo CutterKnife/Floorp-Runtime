@@ -2,6 +2,7 @@
 
 import ctypes
 import errno
+import hashlib
 import io
 import os
 import shutil
@@ -328,6 +329,174 @@ class NativeIOTests(unittest.TestCase):
         self.assertEqual(
             (self.root / "logs/fixture.stdout").read_text(), "fixture complete\n"
         )
+        self.assertNotIn("watchedLogs", result)
+
+    def test_watched_log_preserves_console_and_charges_each_growth_once(self):
+        budget = IOBudget(self.root, 32)
+        result = self.command(
+            'import os,time; p="logs/fixture.mozlog"; '
+            'open(p,"wb").write(b"first"); os.write(1,b"console\\n"); '
+            'time.sleep(.15); open(p,"ab").write(b"second"); os.write(2,b"notice\\n")',
+            watched_logs={"fixture.mozlog": 16},
+            io_budget=budget,
+        )
+        self.assertEqual(budget.used, 11)
+        self.assertEqual(result["watchedLogs"], {
+            "fixture.mozlog": {
+                "bytes": 11,
+                "sha256": hashlib.sha256(b"firstsecond").hexdigest(),
+            }
+        })
+        self.assertEqual((self.root / "logs/fixture.stdout").read_bytes(), b"console\n")
+        self.assertEqual((self.root / "logs/fixture.stderr").read_bytes(), b"notice\n")
+        self.assertTrue(result["ownedCleanupComplete"])
+
+    def test_watched_log_limit_stops_closed_pipes_and_reaps_detached_child(self):
+        code = (
+            'import os,time; child=os.fork(); '
+            'os.setsid() if child==0 else None; '
+            'open("daemon.pid","w").write(str(os.getpid())) if child==0 else None; '
+            'time.sleep(30) if child==0 else None; '
+            'time.sleep(.1); open("logs/fixture.mozlog","wb").write(b"x"*200); '
+            'os.close(1); os.close(2); time.sleep(30)'
+        )
+        with self.assertRaisesRegex(ValueError, "watched log byte limit"):
+            self.command(code, watched_logs={"fixture.mozlog": 16})
+        receipt = read_json(self.root / "logs/fixture.process.json")
+        self.assertEqual(receipt["stop"], "PROCESS_ERROR")
+        self.assertTrue(receipt["ownedCleanupComplete"])
+        self.assertLess(receipt["durationSeconds"], 2)
+        pid = int((self.root / "daemon.pid").read_text())
+        self.assertFalse(Path(f"/proc/{pid}").exists())
+
+    def test_watched_log_catches_terminal_burst_after_leader_exit(self):
+        with self.assertRaisesRegex(ValueError, "watched log byte limit"):
+            self.command(
+                'open("logs/fixture.mozlog","wb").write(b"x"*20)',
+                watched_logs={"fixture.mozlog": 4},
+            )
+        self.assertTrue(read_json(self.root / "logs/fixture.process.json")[
+            "ownedCleanupComplete"
+        ])
+
+    def test_watched_log_shrink_and_inode_replacement_are_rejected(self):
+        for action in (
+            'open(p,"wb").write(b"x")',
+            'os.unlink(p); open(p,"wb").write(b"longer replacement")',
+        ):
+            with self.subTest(action=action), self.assertRaisesRegex(
+                ValueError, "replaced or shrank"
+            ):
+                self.command(
+                    'import os,time; p="logs/watch.mozlog"; '
+                    'open(p,"wb").write(b"initial"); time.sleep(.2); '
+                    + action + '; time.sleep(30)',
+                    name="shrink" if "unlink" not in action else "replace",
+                    watched_logs={"watch.mozlog": 64},
+                )
+            (self.root / "logs/watch.mozlog").unlink()
+
+    def test_watched_log_rejects_preexisting_and_dangling_symlink_without_launch(self):
+        logs = self.root / "logs"
+        logs.mkdir()
+        for index, symlink in enumerate((False, True)):
+            path = logs / "watch.mozlog"
+            if symlink:
+                path.symlink_to(self.root / "missing")
+            else:
+                path.write_bytes(b"prior evidence")
+            with self.subTest(symlink=symlink), self.assertRaisesRegex(
+                ValueError, "watched log already exists"
+            ):
+                self.command(
+                    'open("launched","w").write("wrong")',
+                    name="existing" + str(index),
+                    watched_logs={"watch.mozlog": 64},
+                )
+            self.assertFalse((self.root / "launched").exists())
+            receipt = read_json(logs / ("existing" + str(index) + ".process.json"))
+            self.assertIsNone(receipt["exit"])
+            self.assertEqual(receipt["stop"], "PROCESS_ERROR")
+            path.unlink()
+
+    def test_watched_log_rejects_created_symlink_hardlink_and_fifo(self):
+        target = self.root / "target"
+        target.write_bytes(b"fixture bytes")
+        for index, action in enumerate((
+            'os.symlink("../target", "logs/watch.mozlog")',
+            'os.link("target", "logs/watch.mozlog")',
+            'os.mkfifo("logs/watch.mozlog")',
+        )):
+            with self.subTest(action=action), self.assertRaisesRegex(
+                ValueError, "single regular file"
+            ):
+                self.command(
+                    'import os,time; ' + action + '; time.sleep(30)',
+                    name="unsafe" + str(index),
+                    watched_logs={"watch.mozlog": 64},
+                )
+            receipt = read_json(self.root / "logs" / ("unsafe" + str(index) + ".process.json"))
+            self.assertTrue(receipt["ownedCleanupComplete"])
+            (self.root / "logs/watch.mozlog").unlink()
+        self.assertEqual(target.read_bytes(), b"fixture bytes")
+
+    def test_watched_log_must_exist_after_successful_child_exit(self):
+        with self.assertRaisesRegex(ValueError, "never created"):
+            self.command('print("console")', watched_logs={"fixture.mozlog": 16})
+        receipt = read_json(self.root / "logs/fixture.process.json")
+        self.assertEqual(receipt["exit"], 0)
+        self.assertEqual(receipt["stop"], "PROCESS_ERROR")
+
+    def test_watched_log_byte_budget_exhaustion_cannot_produce_success(self):
+        budget = IOBudget(self.root, 4)
+        with self.assertRaisesRegex(ValueError, "cumulative staging byte budget"):
+            self.command(
+                'import time; open("logs/fixture.mozlog","wb").write(b"12345"); time.sleep(30)',
+                watched_logs={"fixture.mozlog": 16},
+                io_budget=budget,
+            )
+        self.assertEqual(budget.used, 0)
+        self.assertTrue(read_json(self.root / "logs/fixture.process.json")[
+            "ownedCleanupComplete"
+        ])
+
+    def test_watched_log_names_and_caps_are_validated_before_fork(self):
+        for limits in (
+            {"../outside": 1}, {"/outside": 1}, {"a/b": 1}, {"a\\b": 1},
+            {".": 1}, {"watch": True}, {"watch": 0}, {"watch": -1},
+            {"watch": "16"}, {"watch": 1.5},
+        ):
+            with self.subTest(limits=limits), mock.patch.object(
+                qa3_native_io.os, "fork"
+            ) as fork, self.assertRaises(ValueError):
+                self.command('print("unused")', watched_logs=limits)
+            fork.assert_not_called()
+
+    def test_memory_none_omits_only_address_space_prlimit(self):
+        original = subprocess.Popen
+
+        def capture(argv, **kwargs):
+            write_json(self.root / "executed.json", {"argv": argv})
+            return original(argv, **kwargs)
+
+        with mock.patch.object(qa3_native_io.subprocess, "Popen", side_effect=capture):
+            self.command('print("bounded")', memory=None)
+        argv = read_json(self.root / "executed.json")["argv"]
+        self.assertFalse(any(value.startswith("--as=") for value in argv))
+        self.assertIn("--fsize=" + str(qa3_native_io.MAX_EXPANDED), argv)
+        self.assertIn("--core=0", argv)
+        self.assertEqual(argv[0], "/usr/bin/prlimit")
+
+    def test_default_memory_prlimit_remains_enabled(self):
+        original = subprocess.Popen
+
+        def capture(argv, **kwargs):
+            write_json(self.root / "executed.json", {"argv": argv})
+            return original(argv, **kwargs)
+
+        with mock.patch.object(qa3_native_io.subprocess, "Popen", side_effect=capture):
+            self.command('print("bounded")')
+        self.assertIn("--as=" + str(28 * GIB), read_json(self.root / "executed.json")["argv"])
 
     def test_burst_log_hard_cap_and_cumulative_budget(self):
         self.command('print("a" * 31)', name="first", log_limit=40)
@@ -1199,6 +1368,29 @@ class SupervisorBoundaryTests(unittest.TestCase):
             self.reply(valid, expected={"argv": ["changed-command"]})
         with self.assertRaises(ValueError):
             self.reply(valid | {"budgetUsed": 0})
+
+    def test_private_envelope_binds_exact_watched_log_names_caps_and_hashes(self):
+        valid = self.valid_reply()
+        watched = {"fixture.mozlog": {"bytes": 4, "sha256": "c" * 64}}
+        value = valid | {"result": valid["result"] | {"watchedLogs": watched}}
+        limits = {"fixture.mozlog": 8}
+        self.assertEqual(self.reply(value, watched_logs=limits)["watchedLogs"], watched)
+        with self.assertRaises(ValueError):
+            self.reply(value)
+        with self.assertRaises(ValueError):
+            self.reply(valid, watched_logs=limits)
+        for change in (
+            {}, {"other.mozlog": watched["fixture.mozlog"]},
+            {"fixture.mozlog": None},
+            {"fixture.mozlog": {"bytes": True, "sha256": "c" * 64}},
+            {"fixture.mozlog": {"bytes": -1, "sha256": "c" * 64}},
+            {"fixture.mozlog": {"bytes": 9, "sha256": "c" * 64}},
+            {"fixture.mozlog": {"bytes": 4, "sha256": "invalid"}},
+            {"fixture.mozlog": watched["fixture.mozlog"] | {"extra": True}},
+        ):
+            candidate = valid | {"result": valid["result"] | {"watchedLogs": change}}
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.reply(candidate, watched_logs=limits)
 
     def test_private_envelope_staging_budget_is_typed_and_monotone(self):
         valid = self.valid_reply()

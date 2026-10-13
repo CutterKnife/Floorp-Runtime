@@ -280,17 +280,45 @@ class MozlogContracts(unittest.TestCase):
         result = self.verify(events, canary=True, process={**self.process, "exit": 1})
         self.assertEqual(result["verdict"], "EXPECTED_REJECTION")
 
-    def test_browser_canary_uses_assertion_subtest(self):
+    def test_browser_canary_requires_frozen_task_and_exact_assertion_message(self):
         self.case["suite"] = "browser-chrome"
-        for reason in ("QA3_EXPECTED_ASSERTION", "QA3_EXPECTED_ASSERTION - false"):
+        assertion = {
+            "status": "FAIL", "expected": "PASS",
+            "subtest": "qa3_expected_assertion", "message": "QA3_EXPECTED_ASSERTION",
+        }
+        events = copy.deepcopy(self.events)
+        events[2].update(assertion)
+        self.assertEqual(
+            self.verify(events, canary=True, process={**self.process, "exit": 1})[
+                "verdict"
+            ], "EXPECTED_REJECTION",
+        )
+        for changes in (
+            {"subtest": "QA3_EXPECTED_ASSERTION"}, {"subtest": "other_task"},
+            {"message": "prefix QA3_EXPECTED_ASSERTION"},
+            {"message": "QA3_EXPECTED_ASSERTION - false"},
+            {"message": None}, {"expected": "FAIL"}, {"expected": None},
+        ):
             events = copy.deepcopy(self.events)
-            events[2].update(status="FAIL", expected="PASS", subtest=reason)
-            with self.subTest(reason=reason):
-                self.assertEqual(
-                    self.verify(
-                        events, canary=True, process={**self.process, "exit": 1}
-                    )["verdict"],
-                    "EXPECTED_REJECTION",
+            events[2].update({**assertion, **changes})
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.verify(events, canary=True, process={**self.process, "exit": 1})
+        events = copy.deepcopy(self.events)
+        events[2].update(assertion)
+        del events[2]["expected"]
+        with self.assertRaises(ValueError):
+            self.verify(events, canary=True, process={**self.process, "exit": 1})
+        for extra in (
+            {"action": "log", "level": "INFO", "message": "will retry"},
+            {"action": "log", "level": "ERROR", "message": "QA3_EXPECTED_ASSERTION"},
+            {"action": "test_start", "test": self.case["id"]},
+        ):
+            events = copy.deepcopy(self.events)
+            events[2].update(assertion)
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                self.verify(
+                    [*events[:-1], extra, events[-1]], canary=True,
+                    process={**self.process, "exit": 1},
                 )
 
     def test_xpcshell_canary_requires_frozen_function_and_assertion_message(self):

@@ -1563,8 +1563,14 @@ class OriginalConsumerEvidence(unittest.TestCase):
                         subtest="run_test",
                         message="[run_test : 4] QA3_EXPECTED_ASSERTION - false == true",
                     )
+                elif canary:
+                    events[2].update(
+                        subtest="qa3_expected_assertion",
+                        message="QA3_EXPECTED_ASSERTION",
+                    )
             (self.root / "logs" / (name + ".stdout")).write_text(
-                "".join(json.dumps(e) + "\n" for e in events)
+                "TEST-INFO | checking window state\nBrowser Chrome Test Summary\n"
+                if index >= 3 else ""
             )
             (self.root / "logs" / (name + ".stderr")).write_bytes(b"")
             command = {
@@ -1576,6 +1582,11 @@ class OriginalConsumerEvidence(unittest.TestCase):
                 "stdoutSha256": file_digest(self.root / "logs" / (name + ".stdout")),
                 "stderrSha256": file_digest(self.root / "logs" / (name + ".stderr")),
             }
+            if index >= 3:
+                raw_path = self.root / "logs" / (name + ".mozlog")
+                raw_path.write_text("".join(json.dumps(e) + "\n" for e in events))
+                identity = hosted.raw_log_identity(raw_path)
+                command["watchedLogs"] = {raw_path.name: identity}
             write_json(self.root / "logs" / (name + ".process.json"), command)
             commands.append(command)
             if index >= 3:
@@ -1584,8 +1595,9 @@ class OriginalConsumerEvidence(unittest.TestCase):
                     "suite": case["suite"],
                     "canary": canary,
                     "process": command,
+                    "rawLog": {"path": "logs/" + raw_path.name, **identity},
                     "mozlog": verify_mozlog(
-                        self.root / "logs" / (name + ".stdout"),
+                        raw_path,
                         case,
                         self.support,
                         command,
@@ -1631,9 +1643,65 @@ class OriginalConsumerEvidence(unittest.TestCase):
             self.check()
 
     def test_raw_log_tamper_rejected(self):
+        (self.root / "logs/native-0-required.mozlog").write_bytes(b"")
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_raw_mozlog_requires_one_bounded_regular_file(self):
+        path = self.root / "logs/native-0-required.mozlog"
+        original = path.read_bytes()
+        target = self.root / "other.log"
+        target.write_bytes(original)
+        for change in ("missing", "symlink", "hardlink", "empty", "oversized"):
+            path.unlink()
+            if change == "symlink":
+                path.symlink_to(target)
+            elif change == "hardlink":
+                os.link(target, path)
+            elif change == "empty":
+                path.write_bytes(b"")
+            elif change == "oversized":
+                with path.open("wb") as stream:
+                    stream.truncate(16 * 1024**2 + 1)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.check()
+            path.unlink(missing_ok=True)
+            path.write_bytes(original)
+
+    def test_console_tamper_rejected_without_reinterpreting_it_as_mozlog(self):
         (self.root / "logs/native-0-required.stdout").write_bytes(b"")
         with self.assertRaises(ValueError):
             self.check()
+
+    def test_raw_mozlog_identity_and_location_are_required(self):
+        for change in ("missing", "path", "digest", "watcher"):
+            original = copy.deepcopy(self.value)
+            if change == "missing":
+                del self.value["cases"][0]["rawLog"]
+            elif change == "path":
+                self.value["cases"][0]["rawLog"]["path"] = "logs/other.mozlog"
+            elif change == "digest":
+                self.value["cases"][0]["rawLog"]["sha256"] = "e" * 64
+            else:
+                self.value["commands"][3]["watchedLogs"] = {}
+                process = self.root / "logs/native-0-required.process.json"
+                process.unlink()
+                write_json(process, self.value["commands"][3])
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.check()
+            self.value = original
+            process = self.root / "logs/native-0-required.process.json"
+            process.unlink()
+            write_json(process, self.value["commands"][3])
+
+    def rejoin_raw_identity(self, path):
+        command = self.value["commands"][3]
+        identity = hosted.raw_log_identity(path)
+        command["watchedLogs"] = {path.name: identity}
+        self.value["cases"][0]["rawLog"] = {"path": "logs/" + path.name, **identity}
+        process = self.root / "logs/native-0-required.process.json"
+        process.unlink()
+        write_json(process, command)
 
     def test_raw_process_tamper_rejected(self):
         (self.root / "logs/native-0-required.process.json").write_text("{}")
@@ -1641,20 +1709,16 @@ class OriginalConsumerEvidence(unittest.TestCase):
             self.check()
 
     def test_required_skip_rejected_after_raw_hashes_are_rejoined(self):
-        path = self.root / "logs/native-0-required.stdout"
+        path = self.root / "logs/native-0-required.mozlog"
         events = [json.loads(line) for line in path.read_text().splitlines()]
         events[-2]["status"] = "SKIP"
         path.write_text("".join(json.dumps(e) + "\n" for e in events))
-        command = self.value["commands"][3]
-        command["stdoutSha256"] = file_digest(path)
-        process = self.root / "logs/native-0-required.process.json"
-        process.unlink()
-        write_json(process, command)
+        self.rejoin_raw_identity(path)
         with self.assertRaises(ValueError):
             self.check()
 
     def test_internal_retry_rejected_after_raw_hashes_are_rejoined(self):
-        path = self.root / "logs/native-0-required.stdout"
+        path = self.root / "logs/native-0-required.mozlog"
         with path.open("a") as stream:
             stream.write(
                 json.dumps({
@@ -1664,11 +1728,7 @@ class OriginalConsumerEvidence(unittest.TestCase):
                 })
                 + "\n"
             )
-        command = self.value["commands"][3]
-        command["stdoutSha256"] = file_digest(path)
-        process = self.root / "logs/native-0-required.process.json"
-        process.unlink()
-        write_json(process, command)
+        self.rejoin_raw_identity(path)
         with self.assertRaises(ValueError):
             self.check()
 

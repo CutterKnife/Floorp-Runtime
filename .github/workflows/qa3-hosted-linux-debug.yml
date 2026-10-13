@@ -5,7 +5,7 @@ name: QA3 Hosted Debug to Cold Consumer
 
 'on':
   push:
-    branches: [codex/qa3-actions-native-proof-qa337-15]
+    branches: [codex/qa3-actions-native-proof-qa337-16]
 
 permissions:
   contents: read
@@ -16,7 +16,7 @@ jobs:
     if: >-
       github.repository == 'Floorp-Projects/Floorp-Runtime' &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/codex/qa3-actions-native-proof-qa337-15'
+      github.ref == 'refs/heads/codex/qa3-actions-native-proof-qa337-16'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -86,7 +86,7 @@ jobs:
           names = ('qa3_hosted.py', 'qa3_hosted_support.py', 'qa3_hosted_boundary.py',
                    'qa3_native_io.py', 'qa3_native_transport.py', 'qa3_mozlog.py',
                    'qa3_source_cohort.py', 'qa3_build_profile.py', 'runtime_build_context.py',
-                   'qa3_xpcshell_entry.py')
+                   'qa3_xpcshell_entry.py', 'qa3_browser_entry.py')
           for name in names:
               relative = '.github/workflows/scripts/' + name
               raw = subprocess.check_output(git + ['cat-file', 'blob', sha + ':' + relative],
