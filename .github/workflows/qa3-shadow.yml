@@ -25,6 +25,8 @@ jobs:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             /.github/**
+            /.gitattributes
+            /.gitignore
             /python/mozbuild/**
             /python/mozboot/**
             /testing/mozbase/mozfile/**
@@ -34,6 +36,7 @@ jobs:
             /third_party/python/six/**
       - name: Check generated profiles and source/profdata negative contracts
         env:
+          PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: >-
             python/mozbuild:python/mozboot:testing/mozbase/mozfile:third_party/python/packaging:third_party/python/six
         run: |
@@ -49,10 +52,13 @@ jobs:
         if: always()
         env:
           QA3_RUNTIME_HEAD: ${{ github.sha }}
-        run: >-
-          python3 -B .github/workflows/scripts/qa3_source_cohort.py
-          --expected-runtime "$QA3_RUNTIME_HEAD"
-          --output "$RUNNER_TEMP/qa3-runtime/preflight.json"
+        run: |
+          status=0
+          python3 -B .github/workflows/scripts/qa3_source_cohort.py \
+            --expected-runtime "$QA3_RUNTIME_HEAD" \
+            --output "$RUNNER_TEMP/qa3-runtime/preflight.json" || status=$?
+          cat "$RUNNER_TEMP/qa3-runtime/preflight.json"
+          exit "$status"
       - name: Preserve shadow preflight
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
