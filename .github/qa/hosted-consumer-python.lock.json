@@ -1,0 +1,267 @@
+{
+  "publicationAuthorized": false,
+  "pythonABI": "cp312",
+  "readiness": "INPUTS_LOCKED_NOT_TARGET_QUALIFIED",
+  "requirementsSha256": "39c1b7080fed5a691a5eeae7cb2009564e433ed84058dd7886df18547eb57f1d",
+  "runtimeBaseline": "056a4b545dab5ce047a82d035d5cc16f7a1908ca",
+  "schema": "qa3-hosted-consumer-python-lock-v1",
+  "seedSha256": "e084ba7bb4b62a0581266319bfefd7f671bdeb3e39e7f7149de9657cb97a718c",
+  "target": "x86_64-pc-linux-gnu",
+  "wheels": [
+    {
+      "bytes": 84727,
+      "filename": "blessed-1.21.0-py2.py3-none-any.whl",
+      "sha256": "f831e847396f5a2eac6c106f4dfadedf46c4f804733574b15fe86d2ed45a9588",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/ea/8e/0a37e44878fd76fac9eff5355a1bf760701f53cb5c38cdcd59a8fd9ab2a2/blessed-1.21.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 157650,
+      "filename": "certifi-2025.6.15-py3-none-any.whl",
+      "sha256": "2e0c7ce7cb5d8f8634ca55d2ba7e6ec2689a2fd6537d8dec1296a477a4910057",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/84/ae/320161bd181fc06471eed047ecce67b693fd7515b16d495d8932db763426/certifi-2025.6.15-py3-none-any.whl"
+    },
+    {
+      "bytes": 148567,
+      "filename": "charset_normalizer-3.4.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "sha256": "4e594135de17ab3866138f496755f302b72157d115086d100c3f19370839dd3a",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/8c/73/6ede2ec59bce19b3edf4209d70004253ec5f4e319f9a2e3f2f15601ed5f7/charset_normalizer-3.4.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+    },
+    {
+      "bytes": 20277,
+      "filename": "distro-1.9.0-py3-none-any.whl",
+      "sha256": "7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl"
+    },
+    {
+      "bytes": 70442,
+      "filename": "idna-3.10-py3-none-any.whl",
+      "sha256": "946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/76/c6/c88e154df9c4e1a2a66ccf0005a88dfb2650c1dffb6f5ce603dfbd452ce3/idna-3.10-py3-none-any.whl"
+    },
+    {
+      "bytes": 39518,
+      "filename": "manifestparser-2.4.0-py3-none-any.whl",
+      "sha256": "8e9d334909941fb1505ba933be4fe0a81f592c7648340c020d2bc89a28dd8e73",
+      "source": "source-wheels/manifestparser-2.4.0-py3-none-any.whl"
+    },
+    {
+      "bytes": 54516,
+      "filename": "marionette_driver-3.7.1-py3-none-any.whl",
+      "sha256": "cb8edf0cca22fd73f06be2914dfb0d9113dbe29ab392bee51f7ceccf9e724f78",
+      "source": "source-wheels/marionette_driver-3.7.1-py3-none-any.whl"
+    },
+    {
+      "bytes": 12034,
+      "filename": "mozcrash-2.2.1-py2.py3-none-any.whl",
+      "sha256": "f678a9521077889db07b9aa268f2612d67eaeb1d98bece28dae66619c7a3256f",
+      "source": "source-wheels/mozcrash-2.2.1-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 6518,
+      "filename": "mozdebug-0.4.0-py2.py3-none-any.whl",
+      "sha256": "77d8862cf0665f3909f044d8bc4c61d402961d25ed854e3af84d03397869f0a2",
+      "source": "source-wheels/mozdebug-0.4.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 48887,
+      "filename": "mozdevice-4.2.0-py2.py3-none-any.whl",
+      "sha256": "bda364ee147ba73a2f5ec90147d44927bc2973550d2cb89325701261a2e4e700",
+      "source": "source-wheels/mozdevice-4.2.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 9672,
+      "filename": "mozfile-3.0.0-py2.py3-none-any.whl",
+      "sha256": "5a906ee4507028f677c59447b6000bf690e547cf45ffb0c176321f4b1339bbee",
+      "source": "source-wheels/mozfile-3.0.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 18312,
+      "filename": "mozgeckoprofiler-1.0.0-py3-none-any.whl",
+      "sha256": "760684018dfda0da3eb4e8f64d164c88056d53eab12f773e22bb279e421c7af9",
+      "source": "source-wheels/mozgeckoprofiler-1.0.0-py3-none-any.whl"
+    },
+    {
+      "bytes": 7188,
+      "filename": "mozhttpd-0.7.1-py3-none-any.whl",
+      "sha256": "4340cc8ecd494b31e4fe8ca4e65788d33b7f7fd5f7a5314bc825ff25eb92d0a2",
+      "source": "source-wheels/mozhttpd-0.7.1-py3-none-any.whl"
+    },
+    {
+      "bytes": 10364,
+      "filename": "mozinfo-1.2.3-py2.py3-none-any.whl",
+      "sha256": "ec5ef275c66b489839d3bf3b922efad676dab6414a342756b0b3a68128216021",
+      "source": "source-wheels/mozinfo-1.2.3-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 7869,
+      "filename": "mozinstall-2.1.0-py2.py3-none-any.whl",
+      "sha256": "79f7bf678a9eff67cd0acd36b4581052cd4bf040c69c39bbb3e1770dbdf5be6b",
+      "source": "source-wheels/mozinstall-2.1.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 8009,
+      "filename": "mozleak-2.0.0-py2.py3-none-any.whl",
+      "sha256": "d701f0baf426ed501dbabf42fbd3d8b94f4394f6d0995636189e82b426a4d489",
+      "source": "source-wheels/mozleak-2.0.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 74967,
+      "filename": "mozlog-9.0.0-py2.py3-none-any.whl",
+      "sha256": "1112a09be2b3f5067f2baa0fdac0b62c03b813cf6ea9b3f157b7fbfb92456c42",
+      "source": "source-wheels/mozlog-9.0.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 4563,
+      "filename": "moznetwork-1.1.0-py3-none-any.whl",
+      "sha256": "91b54f6d7cd7cadbed145f696f6d5904d855733e7a2ecaf009438fb5c9ba1300",
+      "source": "source-wheels/moznetwork-1.1.0-py3-none-any.whl"
+    },
+    {
+      "bytes": 17757,
+      "filename": "mozpower-1.1.2-py2.py3-none-any.whl",
+      "sha256": "54185f5ba57731fab5a73cc0d1d98339d231e8a0e3ebd678bab1e437646a0cd4",
+      "source": "source-wheels/mozpower-1.1.2-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 24095,
+      "filename": "mozprocess-1.4.0-py2.py3-none-any.whl",
+      "sha256": "349b1981bfad5dfb39badb28cf84cd9913537c0a5e7b47f02ed787f03acd263d",
+      "source": "source-wheels/mozprocess-1.4.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 22078,
+      "filename": "mozprofile-3.0.0-py2.py3-none-any.whl",
+      "sha256": "c316637b6385dc107046a5947ecce3bad889fc0c83278838c0870691958fd938",
+      "source": "source-wheels/mozprofile-3.0.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 53042,
+      "filename": "mozproxy-1.0-py3-none-any.whl",
+      "sha256": "23d1db5545f2fe80510c38f5a43993d160da76e65244144558e0fdd5223ac318",
+      "source": "source-wheels/mozproxy-1.0-py3-none-any.whl"
+    },
+    {
+      "bytes": 47339,
+      "filename": "mozrunner-8.4.0-py2.py3-none-any.whl",
+      "sha256": "41f3b20436ab685aedfa20d740fef18a547e5484cc3f2ee0a74214ac9ed7f216",
+      "source": "source-wheels/mozrunner-8.4.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 3307,
+      "filename": "mozscreenshot-1.0.0-py2.py3-none-any.whl",
+      "sha256": "fdd2c0dcd5ad4474ec2159e66c6883ca7bc87c3f2c249bb2cdacbeaa06744e9b",
+      "source": "source-wheels/mozscreenshot-1.0.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 4613,
+      "filename": "mozserve-0.1-py3-none-any.whl",
+      "sha256": "345440b32b8f7062c71478a270a461e9a7673a2933b2f8b87a4384d6d228224b",
+      "source": "source-wheels/mozserve-0.1-py3-none-any.whl"
+    },
+    {
+      "bytes": 4135,
+      "filename": "mozshellutil-1.0.0-py2.py3-none-any.whl",
+      "sha256": "38d8d4a014187fb42052ffed85ccdf60b1136f3d6d153cf77da72620a525a8f0",
+      "source": "source-wheels/mozshellutil-1.0.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 27859,
+      "filename": "mozsystemmonitor-1.0.1-py2.py3-none-any.whl",
+      "sha256": "8b6bf9421451e6ee8d3c6943d6904293e5abe816a5c32b8ebf62770b12587ac9",
+      "source": "source-wheels/mozsystemmonitor-1.0.1-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 2299,
+      "filename": "mozterm-1.0.0-py2.py3-none-any.whl",
+      "sha256": "ab067baca38672044442d72215a9ea4a080c8480feb3d5892e6373e45108aff8",
+      "source": "source-wheels/mozterm-1.0.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 24250,
+      "filename": "moztest-1.1.0-py3-none-any.whl",
+      "sha256": "7070b857d012d413563a803c4576fdd8173060e8ac10670ec67ca116f9def651",
+      "source": "source-wheels/moztest-1.1.0-py3-none-any.whl"
+    },
+    {
+      "bytes": 4304,
+      "filename": "mozversion-2.4.0-py2.py3-none-any.whl",
+      "sha256": "d8479683d6999283637efc20b9562aa23695d3842fc7b1738405d44a55a5b9b5",
+      "source": "source-wheels/mozversion-2.4.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 66469,
+      "filename": "packaging-25.0-py3-none-any.whl",
+      "sha256": "29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/20/12/38679034af332785aac8774540895e234f4d07f7545804097de4b666afd8/packaging-25.0-py3-none-any.whl"
+    },
+    {
+      "bytes": 155560,
+      "filename": "psutil-7.2.2-cp36-abi3-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/b5/70/5d8df3b09e25bce090399cf48e452d25c935ab72dad19406c77f4e828045/psutil-7.2.2-cp36-abi3-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl"
+    },
+    {
+      "bytes": 807870,
+      "filename": "pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/8b/9d/b3589d3877982d4f2329302ef98a8026e7f4443c765c46cfecc8858c6b4b/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+    },
+    {
+      "bytes": 14006,
+      "filename": "redo-3.0.0-py2.py3-none-any.whl",
+      "sha256": "66905396b2882577fa4bf7edb90fee081db2b98992d303f12e3f898ac7f7bd56",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/64/67/128a17272a74f56da57cbae4a6f282a29d435d080cf80714c1137192b8c9/redo-3.0.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 64847,
+      "filename": "requests-2.32.4-py3-none-any.whl",
+      "sha256": "27babd3cda2a6d50b30443204ee89830707d396671944c998b5975b031ac2b2c",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/7c/e4/56027c4a6b4ae70ca9de302488c5ca95ad4a39e190093d6c1a8ace08341b/requests-2.32.4-py3-none-any.whl"
+    },
+    {
+      "bytes": 11050,
+      "filename": "six-1.17.0-py2.py3-none-any.whl",
+      "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 16588,
+      "filename": "toml-0.10.2-py2.py3-none-any.whl",
+      "sha256": "806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/44/6f/7120676b6d73228c96e17f1f794d8ab046fc910d781c8d151120c3f1569e/toml-0.10.2-py2.py3-none-any.whl"
+    },
+    {
+      "bytes": 38901,
+      "filename": "tomlkit-0.13.3-py3-none-any.whl",
+      "sha256": "c89c649d79ee40629a9fda55f8ace8c6a1b42deb912b2a8fd8d942ddadb606b0",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/bd/75/8539d011f6be8e29f339c42e633aae3cb73bffa95dd0f9adec09b9c58e85/tomlkit-0.13.3-py3-none-any.whl"
+    },
+    {
+      "bytes": 129795,
+      "filename": "urllib3-2.5.0-py3-none-any.whl",
+      "sha256": "e6b01673c0fa6a13e374b50871808eb3bf7046c4b125b216f6bf1cc604cff0dc",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/a7/c2/fe1e52489ae3122415c51f387e221dd0773709bad6c6cdaa599e8a2c5185/urllib3-2.5.0-py3-none-any.whl"
+    },
+    {
+      "bytes": 769763,
+      "filename": "wcwidth-0.9.2-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "sha256": "751bef0ab404b6a1dc028b56b4b85d46486be1c55833f80da533e42dc691f389",
+      "source": "official-pypi",
+      "url": "https://files.pythonhosted.org/packages/db/6c/f940133c71427c208575910e981942bd78c98b1f7cd0d1425ca4b7457c04/wcwidth-0.9.2-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+    }
+  ]
+}
