@@ -209,40 +209,30 @@ def capture_ip(arguments, maximum):
 
 
 def network_checks(value, interfaces):
-    checks = {
-        name: False
-        for name in (
-            "completeInventory",
-            "loopbackActive",
-            "fallbackTunnelsInactive",
-            "loopbackAddressesOnly",
-            "loopbackRoutesOnly",
-        )
-    }
+    checks = {name: False for name in (
+        "completeInventory", "loopbackActive", "fallbackTunnelsInactive",
+        "loopbackAddressesOnly", "loopbackRoutesOnly",
+    )}
     try:
         require(not value["queryErrors"], "network queries failed")
         links, addresses = value["links"], value["addresses"]
         require(
-            isinstance(links, list)
-            and isinstance(addresses, list)
-            and 1 <= len(links) <= 5
-            and len(addresses) == len(links)
+            isinstance(links, list) and isinstance(addresses, list)
+            and 1 <= len(links) <= 5 and len(addresses) == len(links)
             and all(isinstance(row, dict) for row in [*links, *addresses]),
             "invalid network inventory",
         )
         identities = [(row["ifindex"], row["ifname"]) for row in links]
         require(
-            all(
-                type(index) is int and index > 0 and isinstance(name, str)
-                for index, name in identities
-            )
+            all(type(index) is int and index > 0 and isinstance(name, str)
+                for index, name in identities)
             and len(set(identities)) == len(identities)
             and len({name for _, name in identities}) == len(identities)
             and len({index for index, _ in identities}) == len(identities)
             and sorted(identities) == sorted(interfaces)
-            and sorted(identities)
-            == sorted((row["ifindex"], row["ifname"]) for row in addresses),
-            "inconsistent network inventory",
+            and sorted(identities) == sorted(
+                (row["ifindex"], row["ifname"]) for row in addresses
+            ), "inconsistent network inventory",
         )
         checks["completeInventory"] = True
         for row in links:
@@ -253,12 +243,10 @@ def network_checks(value, interfaces):
             )
             if row["ifname"] == "lo":
                 require(
-                    row["ifindex"] == 1
-                    and row["link_type"] == "loopback"
+                    row["ifindex"] == 1 and row["link_type"] == "loopback"
                     and {"LOOPBACK", "UP", "LOWER_UP"} <= set(flags)
                     and row["operstate"] in {"UP", "UNKNOWN"}
-                    and "master" not in row
-                    and "linkinfo" not in row,
+                    and "master" not in row and "linkinfo" not in row,
                     "loopback is not active",
                 )
                 checks["loopbackActive"] = True
@@ -267,31 +255,24 @@ def network_checks(value, interfaces):
             info = row["linkinfo"]
             data = info["info_data"]
             require(
-                row["link_type"] == link_type
-                and info["info_kind"] == kind
+                row["link_type"] == link_type and info["info_kind"] == kind
                 and isinstance(data, dict)
                 and not {"UP", "LOWER_UP", "RUNNING", "LOOPBACK"} & set(flags)
                 and row["operstate"] == "DOWN"
-                and "master" not in row
-                and "link_netnsid" not in row
+                and "master" not in row and "link_netnsid" not in row
                 and row.get("link_index", 0) == 0
                 and data["local"] == data["remote"] == "any"
-                and "link" not in data
-                and not data.get("external", False)
+                and "link" not in data and not data.get("external", False)
                 and data.get("encap", "none") == "none"
-                and all(
-                    data.get(key, 0) in {0, "0", "0x0", "0.0.0.0"}
-                    for key in ("ikey", "okey", "fwmark", "encap_sport", "encap_dport")
-                ),
+                and all(data.get(key, 0) in {0, "0", "0x0", "0.0.0.0"}
+                        for key in ("ikey", "okey", "fwmark", "encap_sport",
+                                    "encap_dport")),
                 "configured or active fallback tunnel",
             )
             require(
                 ("prefix" not in data and "prefixlen" not in data)
-                or (
-                    kind == "sit"
-                    and data["prefix"] == "2002::"
-                    and data["prefixlen"] == 16
-                ),
+                or (kind == "sit" and data["prefix"] == "2002::"
+                    and data["prefixlen"] == 16),
                 "non-default fallback 6rd prefix",
             )
             require(
@@ -313,16 +294,12 @@ def network_checks(value, interfaces):
                     address["local"] + "/" + str(address["prefixlen"])
                 )
                 require(
-                    address["scope"] == "host"
-                    and "peer" not in address
+                    address["scope"] == "host" and "peer" not in address
                     and (
-                        (
-                            address["family"] == "inet"
-                            and local.version == 4
-                            and local.network.subnet_of(
-                                ipaddress.ip_network("127.0.0.0/8")
-                            )
-                        )
+                        (address["family"] == "inet" and local.version == 4
+                         and local.network.subnet_of(
+                             ipaddress.ip_network("127.0.0.0/8")
+                         ))
                         or (address["family"] == "inet6" and str(local) == "::1/128")
                     ),
                     "non-loopback address",
@@ -342,18 +319,15 @@ def network_checks(value, interfaces):
             for route in routes:
                 destination = ipaddress.ip_network(route["dst"], strict=False)
                 require(
-                    route["dev"] == "lo"
-                    and destination.version == version
+                    route["dev"] == "lo" and destination.version == version
                     and destination.subnet_of(ipaddress.ip_network(loopback))
-                    and route.get("type", "unicast")
-                    in {"local", "broadcast", "unicast"}
-                    and not {"gateway", "via", "multipath", "nexthops", "nhid", "encap"}
-                    & route.keys()
-                    and all(
-                        ipaddress.ip_address(route[key]).is_loopback
-                        for key in ("prefsrc", "src")
-                        if key in route
-                    ),
+                    and route.get("type", "unicast") in {
+                        "local", "broadcast", "unicast"
+                    }
+                    and not {"gateway", "via", "multipath", "nexthops", "nhid",
+                             "encap"} & route.keys()
+                    and all(ipaddress.ip_address(route[key]).is_loopback
+                            for key in ("prefsrc", "src") if key in route),
                     "non-loopback route",
                 )
         checks["loopbackRoutesOnly"] = True
@@ -381,8 +355,7 @@ def worker_network(interfaces):
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
             value[name] = None
             value["queryErrors"][name] = {
-                "type": type(exc).__name__,
-                "errno": getattr(exc, "errno", None),
+                "type": type(exc).__name__, "errno": getattr(exc, "errno", None),
                 "message": str(exc)[:256],
             }
     value["checks"] = network_checks(value, interfaces)
@@ -500,24 +473,21 @@ def verify_worker(spec):
     namespaces = {
         name: os.readlink("/proc/self/ns/" + name) for name in ("mnt", "net", "user")
     }
-    security = json.dumps(
-        {
-            "schema": "qa3-worker-security-v1",
-            "uid": os.getuid(),
-            "effectiveUid": os.geteuid(),
-            "gid": os.getgid(),
-            "effectiveGid": os.getegid(),
-            "noNewPrivs": status.get("NoNewPrivs", "").strip(),
-            "effectiveCapabilities": status.get("CapEff", "").strip(),
-            "namespaces": namespaces,
-            "controllerNamespaces": spec["controllerNamespaces"],
-            "kernel": os.uname().release,
-            "cgroup": Path("/proc/self/cgroup").read_text()[:4096],
-            "nativeExecutionObservation": "NOT_CHECKED",
-            "publicationAuthorized": False,
-        },
-        sort_keys=True,
-    )
+    security = json.dumps({
+        "schema": "qa3-worker-security-v1",
+        "uid": os.getuid(),
+        "effectiveUid": os.geteuid(),
+        "gid": os.getgid(),
+        "effectiveGid": os.getegid(),
+        "noNewPrivs": status.get("NoNewPrivs", "").strip(),
+        "effectiveCapabilities": status.get("CapEff", "").strip(),
+        "namespaces": namespaces,
+        "controllerNamespaces": spec["controllerNamespaces"],
+        "kernel": os.uname().release,
+        "cgroup": Path("/proc/self/cgroup").read_text()[:4096],
+        "nativeExecutionObservation": "NOT_CHECKED",
+        "publicationAuthorized": False,
+    }, sort_keys=True)
     require(
         len(security.encode()) <= 16384, "worker security diagnostic budget exceeded"
     )
@@ -575,18 +545,15 @@ def verify_worker(spec):
     except OSError as exc:
         events = {"errno": exc.errno}
     print(
-        json.dumps(
-            {
-                "schema": "qa3-worker-cgroup-v1",
-                "scope": str(relative),
-                "expected": expected,
-                "actual": limits,
-                "events": events,
-                "nativeExecutionObservation": "NOT_CHECKED",
-                "publicationAuthorized": False,
-            },
-            sort_keys=True,
-        ),
+        json.dumps({
+            "schema": "qa3-worker-cgroup-v1",
+            "scope": str(relative),
+            "expected": expected,
+            "actual": limits,
+            "events": events,
+            "nativeExecutionObservation": "NOT_CHECKED",
+            "publicationAuthorized": False,
+        }, sort_keys=True),
         flush=True,
     )
     require(limits == expected, "consumer limits differ")
@@ -1152,6 +1119,29 @@ def collect(args):
     )
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
         stream.write("verdict=PASS_DEBUG_HARNESS_ONLY\n")
+    consumer = read_json(destination / "export/consumer.json")
+    print(json.dumps({
+        "schema": "qa3-hosted-verified-summary-v1",
+        "context": context,
+        "status": "PASS_DEBUG_HARNESS_ONLY",
+        "scopeEmpty": final["scopeEmpty"],
+        "serviceExit": final["serviceExit"],
+        "consumerSha256": file_digest(destination / "export/consumer.json"),
+        "rootReceiptSha256": file_digest(destination / "evidence/final.json"),
+        "producerBootSha256": consumer["producerBootSha256"],
+        "consumerBootSha256": consumer["consumerBootSha256"],
+        "cases": [{
+            "name": case["name"],
+            "suite": case["suite"],
+            "canary": case["canary"],
+            "exit": case["process"]["exit"],
+            "ownedCleanupComplete": case["process"]["ownedCleanupComplete"],
+            "rawLog": case["rawLog"],
+            "mozlog": case["mozlog"],
+        } for case in consumer["cases"]],
+        "nativeProductQualification": "UNVERIFIED",
+        "publicationAuthorized": False,
+    }, sort_keys=True))
 
 
 def main():

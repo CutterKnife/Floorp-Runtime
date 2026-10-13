@@ -3,7 +3,7 @@
 
 name: QA3 Hosted Debug to Cold Consumer
 
-'on':
+"on":
   push:
     branches: [codex/qa3-actions-native-proof-qa337-17]
 

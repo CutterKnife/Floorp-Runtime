@@ -883,8 +883,7 @@ def verify_test_install(value, objdir):
         and type(value.get("expandedDirectoryCount")) is int
         and type(value.get("expandedFileCount")) is int
         and 0 <= value["expandedDirectoryCount"] <= value["expandedFileCount"]
-        and value["expandedDirectoryCount"]
-        == len(value.get("expandedDirectories", [])),
+        and value["expandedDirectoryCount"] == len(value.get("expandedDirectories", [])),
         "missing generated test-manifest normalization evidence",
     )
     hash_value(value["beforeSha256"])

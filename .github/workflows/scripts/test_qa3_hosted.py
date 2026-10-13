@@ -22,7 +22,7 @@ import qa3_bootstrap_probe as bootstrap_probe
 import qa3_hosted as hosted
 import qa3_hosted_boundary as boundary
 from qa3_build_profile import ac_options, enable_hosted_test_support, profile
-from qa3_hosted_support import PLAN_PATH, native_schedule
+from qa3_hosted_support import PLAN_PATH, extra_packaged_materials, native_schedule
 from qa3_mozlog import verify_mozlog
 from qa3_native_io import GIB, IOBudget, extract_archive, read_json, write_json
 from qa3_native_transport import verify_artifact_metadata
@@ -53,31 +53,19 @@ PHASES = [
 
 
 def loopback_network(fallbacks=False):
-    links = [
-        {
-            "ifindex": 1,
-            "ifname": "lo",
-            "link_type": "loopback",
-            "flags": ["LOOPBACK", "UP", "LOWER_UP"],
-            "operstate": "UNKNOWN",
-        }
-    ]
-    addresses = [
-        {
-            "ifindex": 1,
-            "ifname": "lo",
-            "link_type": "loopback",
-            "addr_info": [
-                {
-                    "family": "inet",
-                    "local": "127.0.0.1",
-                    "prefixlen": 8,
-                    "scope": "host",
-                },
-                {"family": "inet6", "local": "::1", "prefixlen": 128, "scope": "host"},
-            ],
-        }
-    ]
+    links = [{
+        "ifindex": 1, "ifname": "lo", "link_type": "loopback",
+        "flags": ["LOOPBACK", "UP", "LOWER_UP"], "operstate": "UNKNOWN",
+    }]
+    addresses = [{
+        "ifindex": 1, "ifname": "lo", "link_type": "loopback",
+        "addr_info": [
+            {"family": "inet", "local": "127.0.0.1", "prefixlen": 8,
+             "scope": "host"},
+            {"family": "inet6", "local": "::1", "prefixlen": 128,
+             "scope": "host"},
+        ],
+    }]
     if fallbacks:
         for index, (name, (kind, link_type)) in enumerate(
             boundary.FALLBACK_TUNNELS.items(), 2
@@ -86,43 +74,24 @@ def loopback_network(fallbacks=False):
             if name == "sit0":
                 data.update(ttl=64, prefix="2002::", prefixlen=16)
             links.append({
-                "ifindex": index,
-                "ifname": name,
-                "link_type": link_type,
-                "flags": ["NOARP"],
-                "operstate": "DOWN",
-                "link_index": 0,
+                "ifindex": index, "ifname": name, "link_type": link_type,
+                "flags": ["NOARP"], "operstate": "DOWN", "link_index": 0,
                 "linkinfo": {"info_kind": kind, "info_data": data},
             })
             addresses.append({
-                "ifindex": index,
-                "ifname": name,
-                "link_type": link_type,
+                "ifindex": index, "ifname": name, "link_type": link_type,
                 "addr_info": [],
             })
     return {
-        "queryErrors": {},
-        "links": links,
-        "addresses": addresses,
+        "queryErrors": {}, "links": links, "addresses": addresses,
         "ipv4Routes": [
-            {
-                "type": "local",
-                "dst": "127.0.0.0/8",
-                "dev": "lo",
-                "table": "local",
-                "scope": "host",
-                "prefsrc": "127.0.0.1",
-            },
-            {
-                "type": "broadcast",
-                "dst": "127.255.255.255",
-                "dev": "lo",
-                "table": "local",
-                "scope": "link",
-                "prefsrc": "127.0.0.1",
-            },
+            {"type": "local", "dst": "127.0.0.0/8", "dev": "lo",
+             "table": "local", "scope": "host", "prefsrc": "127.0.0.1"},
+            {"type": "broadcast", "dst": "127.255.255.255", "dev": "lo",
+             "table": "local", "scope": "link", "prefsrc": "127.0.0.1"},
         ],
-        "ipv6Routes": [{"type": "local", "dst": "::1", "dev": "lo", "table": "local"}],
+        "ipv6Routes": [{"type": "local", "dst": "::1", "dev": "lo",
+                        "table": "local"}],
     }
 
 
@@ -1224,28 +1193,18 @@ class HostedBoundaries(unittest.TestCase):
                 boundary.os, "readlink", side_effect=lambda path: "worker-" + path[-3:]
             ),
             mock.patch.object(
-                boundary.socket,
-                "if_nameindex",
+                boundary.socket, "if_nameindex",
                 return_value=[(1, "lo")] if interfaces is None else interfaces,
             ),
             mock.patch.object(
-                boundary,
-                "capture_ip",
-                side_effect=lambda arguments, maximum: json.dumps(
-                    network[
-                        {
-                            "-d": "links",
-                            "addr": "addresses",
-                            "-4": "ipv4Routes",
-                            "-6": "ipv6Routes",
-                        }[arguments[0]]
-                    ]
-                ).encode(),
+                boundary, "capture_ip",
+                side_effect=lambda arguments, maximum: json.dumps(network[{
+                    "-d": "links", "addr": "addresses",
+                    "-4": "ipv4Routes", "-6": "ipv6Routes",
+                }[arguments[0]]]).encode(),
             ),
             mock.patch.object(
-                Path,
-                "read_text",
-                side_effect=lambda path, **kwargs: proc[str(path)],
+                Path, "read_text", side_effect=lambda path, **kwargs: proc[str(path)],
                 autospec=True,
             ),
             mock.patch.object(Path, "exists", return_value=visible),
@@ -1263,13 +1222,11 @@ class HostedBoundaries(unittest.TestCase):
             ({"visible": True}, "controllerProcessHidden", "process remains visible"),
             (
                 {"interfaces": [(1, "lo"), (2, "eth0")]},
-                "loopbackOnly",
-                "network is not loopback-only",
+                "loopbackOnly", "network is not loopback-only",
             ),
             (
                 {"readable": "/controller/download"},
-                "controllerInputsUnreadable",
-                "inputs remain readable",
+                "controllerInputsUnreadable", "inputs remain readable",
             ),
         ):
             spec, proc, mocks = self.worker_verification(**arguments)
@@ -1283,8 +1240,7 @@ class HostedBoundaries(unittest.TestCase):
                     json.loads(call.args[0]) for call in printer.call_args_list
                 ]
                 visibility = next(
-                    value
-                    for value in observations
+                    value for value in observations
                     if value["schema"] == "qa3-worker-visibility-v1"
                 )
                 self.assertIs(visibility["checks"][condition], False)
@@ -1462,12 +1418,8 @@ class WorkerNetwork(unittest.TestCase):
                 self.assertFalse(self.accepted(fixture))
 
     def test_non_loopback_addresses_and_routes_are_rejected(self):
-        address = {
-            "family": "inet",
-            "local": "192.0.2.1",
-            "prefixlen": 24,
-            "scope": "global",
-        }
+        address = {"family": "inet", "local": "192.0.2.1", "prefixlen": 24,
+                   "scope": "global"}
         for index in (0, 1):
             value = loopback_network(fallbacks=True)
             value["addresses"][index]["addr_info"].append(address)
@@ -1476,7 +1428,8 @@ class WorkerNetwork(unittest.TestCase):
             ("ipv4Routes", {"dst": "default", "dev": "lo"}),
             ("ipv4Routes", {"dst": "192.0.2.0/24", "dev": "lo", "table": 100}),
             ("ipv4Routes", {"dst": "127.0.0.1", "dev": "tunl0"}),
-            ("ipv4Routes", {"dst": "127.0.0.1", "dev": "lo", "gateway": "192.0.2.2"}),
+            ("ipv4Routes", {"dst": "127.0.0.1", "dev": "lo",
+                            "gateway": "192.0.2.2"}),
             ("ipv4Routes", {"dst": "127.0.0.1", "dev": "lo", "multipath": []}),
             ("ipv6Routes", {"dst": "ff00::/8", "dev": "lo"}),
         ):
@@ -1489,10 +1442,8 @@ class WorkerNetwork(unittest.TestCase):
         value = loopback_network(fallbacks=True)
         self.assertTrue(self.accepted(value))
         for field, configured in (
-            ("prefix", "2001:db8::"),
-            ("prefixlen", 32),
-            ("relay_prefix", "192.0.2.0"),
-            ("relay_prefixlen", 24),
+            ("prefix", "2001:db8::"), ("prefixlen", 32),
+            ("relay_prefix", "192.0.2.0"), ("relay_prefixlen", 24),
         ):
             fixture = copy.deepcopy(value)
             fixture["links"][2]["linkinfo"]["info_data"][field] = configured
@@ -1517,26 +1468,22 @@ class WorkerNetwork(unittest.TestCase):
 
     def test_network_queries_are_all_table_and_failures_are_diagnostic(self):
         value = loopback_network(fallbacks=True)
-        answers = [
-            value[key] for key in ("links", "addresses", "ipv4Routes", "ipv6Routes")
-        ]
+        answers = [value[key] for key in (
+            "links", "addresses", "ipv4Routes", "ipv6Routes"
+        )]
         with mock.patch.object(
-            boundary,
-            "capture_ip",
+            boundary, "capture_ip",
             side_effect=[json.dumps(row).encode() for row in answers],
         ) as query, mock.patch("builtins.print") as printer:
-            observation = boundary.worker_network([
-                (row["ifindex"], row["ifname"]) for row in value["links"]
-            ])
+            observation = boundary.worker_network(
+                [(row["ifindex"], row["ifname"]) for row in value["links"]]
+            )
         self.assertTrue(all(observation["checks"].values()))
         self.assertEqual(
             [call.args[0] for call in query.call_args_list],
-            [
-                ["-d", "link", "show"],
-                ["addr", "show"],
-                ["-4", "route", "show", "table", "all"],
-                ["-6", "route", "show", "table", "all"],
-            ],
+            [["-d", "link", "show"], ["addr", "show"],
+             ["-4", "route", "show", "table", "all"],
+             ["-6", "route", "show", "table", "all"]],
         )
         self.assertLessEqual(
             len(printer.call_args.args[0].encode()), boundary.MAX_NETWORK_JSON
@@ -1752,6 +1699,81 @@ class OriginalConsumerEvidence(unittest.TestCase):
                 plan["selection"][0]["minimumAssertions"] = True
             with self.subTest(change=change), self.assertRaises(ValueError):
                 native_schedule(plan)
+
+    def test_new_required_skip_is_rejected_with_matching_process_and_raw_hashes(self):
+        for index in (4, 5):
+            original = copy.deepcopy(self.value)
+            name = self.value["cases"][index]["name"]
+            path = self.root / "logs" / (name + ".mozlog")
+            raw = path.read_bytes()
+            events = [json.loads(line) for line in raw.splitlines()]
+            events[-2]["status"] = "SKIP"
+            path.write_text("".join(json.dumps(e) + "\n" for e in events))
+            identity = hosted.raw_log_identity(path)
+            command = self.value["commands"][index + 3]
+            command["watchedLogs"] = {path.name: identity}
+            self.value["cases"][index]["rawLog"] = {"path": "logs/" + path.name, **identity}
+            receipt = self.root / "logs" / (name + ".process.json")
+            receipt.unlink()
+            write_json(receipt, command)
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                self.check()
+            self.value = original
+            path.write_bytes(raw)
+            receipt.unlink()
+            write_json(receipt, self.value["commands"][index + 3])
+
+    def test_new_support_bytes_remain_source_pinned_after_inventory_is_rejoined(self):
+        from qa3_native_io import capture_material_tree
+
+        bindings = [
+            (case["id"], case["archivePath"]) for case in self.plan["selection"]
+        ] + list(extra_packaged_materials()) + [
+            ("testing/mochitest/runtests.py", "mochitest/runtests.py"),
+            ("testing/mochitest/mochitest_options.py", "mochitest/mochitest_options.py"),
+            ("testing/xpcshell/runxpcshelltests.py", "xpcshell/runxpcshelltests.py"),
+            ("testing/xpcshell/xpcshellcommandline.py", "xpcshell/xpcshellcommandline.py"),
+            ("browser/base/content/test/performance/head.js", "mochitest/browser/browser/base/content/test/performance/head.js"),
+            ("xpcom/tests/unit/head_xpcom.js", "xpcshell/tests/xpcom/tests/unit/head_xpcom.js"),
+            ("xpcom/geckoprocesstypes_generator/geckoprocesstypes/__init__.py", "tools/geckoprocesstypes_generator/geckoprocesstypes/__init__.py"),
+            ("testing/mozbase/setup_development.py", "mozbase/setup_development.py"),
+        ]
+        plan = copy.deepcopy(self.plan)
+        for source, archive in bindings:
+            path = self.support / archive
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(source)
+            row = next(row for row in plan["sourceMaterials"] if row["path"] == source)
+            row["sha256"] = file_digest(path)
+        write_json(self.support / "plan.json", plan)
+        for name in ("gmp-fake", "gmp-fakeopenh264"):
+            path = self.support / "bin/plugins" / name / "1.0/plugin"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"same-build-plugin-fixture")
+        value = {
+            "supportInventory": capture_material_tree(self.support),
+            "planSha256": file_digest(self.support / "plan.json"),
+            "pythonEnvironmentSha256": DIGEST,
+            "canaryTransforms": [{}, {}],
+            "helpers": dict.fromkeys(("xpcshell", "ssltunnel", "certutil", "pk12util"), {}),
+        }
+        with mock.patch.object(hosted, "verify_python_environment"), mock.patch.object(hosted, "canary_case"), mock.patch.object(hosted, "elf_identity", return_value={}):
+            self.assertEqual(hosted.verify_support(self.support, value), plan)
+            for archive in (
+                "modules/TabGroupTestUtils.sys.mjs",
+                "mochitest/browser/browser/components/tabbrowser/test/browser/tabs/head.js",
+                "mochitest/browser/browser/components/tabbrowser/test/browser/tabs/browser.toml",
+                "xpcshell/tests/xpcom/tests/unit/data/iniparser17.ini",
+                "xpcshell/tests/xpcom/tests/unit/data/iniparser16-utf8BOM.ini",
+            ):
+                path = self.support / archive
+                raw = path.read_bytes()
+                path.write_bytes(raw + b"changed")
+                value["supportInventory"] = capture_material_tree(self.support)
+                with self.subTest(archive=archive), self.assertRaises(ValueError):
+                    hosted.verify_support(self.support, value)
+                path.write_bytes(raw)
+                value["supportInventory"] = capture_material_tree(self.support)
 
     def test_failure_export_keeps_new_original_logs_and_rejects_arbitrary_outputs(self):
         import shutil
@@ -2461,7 +2483,7 @@ class HostedMozbaseArchiveShape(unittest.TestCase):
             row["path"]: row["sha256"]
             for row in read_json(self.support / "plan.json")["sourceMaterials"]
         }
-        metadata = {"testing/mozbase/moz.build", "testing/mozbase/setup_development.py"}
+        metadata = {"testing/mozbase/moz.build", "testing/mozbase/setup_development.py", "browser/base/content/test/performance/browser.toml", "browser/components/tabbrowser/test/browser/tabs/browser.toml", "xpcom/tests/unit/xpcshell.toml"}
         self.assertTrue(metadata <= source_hashes.keys())
         self.assertEqual(
             set(checkout["sparse-checkout"].splitlines()),
