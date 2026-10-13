@@ -131,7 +131,8 @@ LayoutDeviceIntSize RenderCompositorNative::GetBufferSize() {
 }
 
 bool RenderCompositorNative::ShouldUseNativeCompositor() {
-  return gfx::gfxVars::UseWebRenderCompositor();
+  return gfx::gfxVars::UseWebRenderCompositor() &&
+         mWidget->GetCompositorOptions().AllowNativeCompositor();
 }
 
 void RenderCompositorNative::GetCompositorCapabilities(
