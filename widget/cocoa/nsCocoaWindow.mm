@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "appshim/MacWebAppService.h"
-#include "appshim/MacWebAppWidget.h"
 #include "nsCocoaWindow.h"
 
 #include "CocoaCompositorWidget.h"
@@ -5484,9 +5482,6 @@ void nsCocoaWindow::SetModal(bool aModal) {
   // (similar) event loops).
   for (auto* ancestorWidget = mParent; ancestorWidget;
        ancestorWidget = ancestorWidget->GetParent()) {
-    if (ancestorWidget->IsMacWebAppWidget()) {
-      continue;
-    }
     auto* ancestor = static_cast<nsCocoaWindow*>(ancestorWidget);
     const bool changed = aModal ? ancestor->mNumModalDescendants++ == 0
                                 : --ancestor->mNumModalDescendants == 0;
@@ -7610,12 +7605,6 @@ bool nsCocoaWindow::GetEditCommands(NativeKeyBindingsType aType,
 }
 
 already_AddRefed<nsIWidget> nsIWidget::CreateTopLevelWindow() {
-  nsCString appId = mozilla::widget::MacWebAppService::TakePendingAppId();
-  if (!appId.IsEmpty()) {
-    nsCOMPtr<nsIWidget> window = new mozilla::widget::MacWebAppWidget(appId);
-    return window.forget();
-  }
-
   nsCOMPtr<nsIWidget> window = new nsCocoaWindow();
   return window.forget();
 }
