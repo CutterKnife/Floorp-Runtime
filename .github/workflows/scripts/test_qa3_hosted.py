@@ -22,6 +22,7 @@ import qa3_bootstrap_probe as bootstrap_probe
 import qa3_hosted as hosted
 import qa3_hosted_boundary as boundary
 from qa3_build_profile import ac_options, enable_hosted_test_support, profile
+from qa3_hosted_support import PLAN_PATH, native_schedule
 from qa3_mozlog import verify_mozlog
 from qa3_native_io import GIB, IOBudget, extract_archive, read_json, write_json
 from qa3_native_transport import verify_artifact_metadata
@@ -46,23 +47,37 @@ PHASES = [
     "native-0-assertion-canary",
     "native-1-required",
     "native-1-assertion-canary",
+    "native-2-required",
+    "native-3-required",
 ]
 
 
 def loopback_network(fallbacks=False):
-    links = [{
-        "ifindex": 1, "ifname": "lo", "link_type": "loopback",
-        "flags": ["LOOPBACK", "UP", "LOWER_UP"], "operstate": "UNKNOWN",
-    }]
-    addresses = [{
-        "ifindex": 1, "ifname": "lo", "link_type": "loopback",
-        "addr_info": [
-            {"family": "inet", "local": "127.0.0.1", "prefixlen": 8,
-             "scope": "host"},
-            {"family": "inet6", "local": "::1", "prefixlen": 128,
-             "scope": "host"},
-        ],
-    }]
+    links = [
+        {
+            "ifindex": 1,
+            "ifname": "lo",
+            "link_type": "loopback",
+            "flags": ["LOOPBACK", "UP", "LOWER_UP"],
+            "operstate": "UNKNOWN",
+        }
+    ]
+    addresses = [
+        {
+            "ifindex": 1,
+            "ifname": "lo",
+            "link_type": "loopback",
+            "addr_info": [
+                {
+                    "family": "inet",
+                    "local": "127.0.0.1",
+                    "prefixlen": 8,
+                    "scope": "host",
+                },
+                {"family": "inet6", "local": "::1", "prefixlen": 128, "scope": "host"},
+            ],
+        }
+    ]
     if fallbacks:
         for index, (name, (kind, link_type)) in enumerate(
             boundary.FALLBACK_TUNNELS.items(), 2
@@ -71,24 +86,43 @@ def loopback_network(fallbacks=False):
             if name == "sit0":
                 data.update(ttl=64, prefix="2002::", prefixlen=16)
             links.append({
-                "ifindex": index, "ifname": name, "link_type": link_type,
-                "flags": ["NOARP"], "operstate": "DOWN", "link_index": 0,
+                "ifindex": index,
+                "ifname": name,
+                "link_type": link_type,
+                "flags": ["NOARP"],
+                "operstate": "DOWN",
+                "link_index": 0,
                 "linkinfo": {"info_kind": kind, "info_data": data},
             })
             addresses.append({
-                "ifindex": index, "ifname": name, "link_type": link_type,
+                "ifindex": index,
+                "ifname": name,
+                "link_type": link_type,
                 "addr_info": [],
             })
     return {
-        "queryErrors": {}, "links": links, "addresses": addresses,
+        "queryErrors": {},
+        "links": links,
+        "addresses": addresses,
         "ipv4Routes": [
-            {"type": "local", "dst": "127.0.0.0/8", "dev": "lo",
-             "table": "local", "scope": "host", "prefsrc": "127.0.0.1"},
-            {"type": "broadcast", "dst": "127.255.255.255", "dev": "lo",
-             "table": "local", "scope": "link", "prefsrc": "127.0.0.1"},
+            {
+                "type": "local",
+                "dst": "127.0.0.0/8",
+                "dev": "lo",
+                "table": "local",
+                "scope": "host",
+                "prefsrc": "127.0.0.1",
+            },
+            {
+                "type": "broadcast",
+                "dst": "127.255.255.255",
+                "dev": "lo",
+                "table": "local",
+                "scope": "link",
+                "prefsrc": "127.0.0.1",
+            },
         ],
-        "ipv6Routes": [{"type": "local", "dst": "::1", "dev": "lo",
-                        "table": "local"}],
+        "ipv6Routes": [{"type": "local", "dst": "::1", "dev": "lo", "table": "local"}],
     }
 
 
@@ -836,6 +870,7 @@ class HostedContracts(unittest.TestCase):
             "--property=MemorySwapMax=0",
             "--property=TasksMax=512",
             "--property=CPUQuota=400%",
+            "--property=RuntimeMaxSec=1500s",
             "-i",
         ):
             self.assertIn(value, argv)
@@ -1189,18 +1224,28 @@ class HostedBoundaries(unittest.TestCase):
                 boundary.os, "readlink", side_effect=lambda path: "worker-" + path[-3:]
             ),
             mock.patch.object(
-                boundary.socket, "if_nameindex",
+                boundary.socket,
+                "if_nameindex",
                 return_value=[(1, "lo")] if interfaces is None else interfaces,
             ),
             mock.patch.object(
-                boundary, "capture_ip",
-                side_effect=lambda arguments, maximum: json.dumps(network[{
-                    "-d": "links", "addr": "addresses",
-                    "-4": "ipv4Routes", "-6": "ipv6Routes",
-                }[arguments[0]]]).encode(),
+                boundary,
+                "capture_ip",
+                side_effect=lambda arguments, maximum: json.dumps(
+                    network[
+                        {
+                            "-d": "links",
+                            "addr": "addresses",
+                            "-4": "ipv4Routes",
+                            "-6": "ipv6Routes",
+                        }[arguments[0]]
+                    ]
+                ).encode(),
             ),
             mock.patch.object(
-                Path, "read_text", side_effect=lambda path, **kwargs: proc[str(path)],
+                Path,
+                "read_text",
+                side_effect=lambda path, **kwargs: proc[str(path)],
                 autospec=True,
             ),
             mock.patch.object(Path, "exists", return_value=visible),
@@ -1218,11 +1263,13 @@ class HostedBoundaries(unittest.TestCase):
             ({"visible": True}, "controllerProcessHidden", "process remains visible"),
             (
                 {"interfaces": [(1, "lo"), (2, "eth0")]},
-                "loopbackOnly", "network is not loopback-only",
+                "loopbackOnly",
+                "network is not loopback-only",
             ),
             (
                 {"readable": "/controller/download"},
-                "controllerInputsUnreadable", "inputs remain readable",
+                "controllerInputsUnreadable",
+                "inputs remain readable",
             ),
         ):
             spec, proc, mocks = self.worker_verification(**arguments)
@@ -1236,7 +1283,8 @@ class HostedBoundaries(unittest.TestCase):
                     json.loads(call.args[0]) for call in printer.call_args_list
                 ]
                 visibility = next(
-                    value for value in observations
+                    value
+                    for value in observations
                     if value["schema"] == "qa3-worker-visibility-v1"
                 )
                 self.assertIs(visibility["checks"][condition], False)
@@ -1414,8 +1462,12 @@ class WorkerNetwork(unittest.TestCase):
                 self.assertFalse(self.accepted(fixture))
 
     def test_non_loopback_addresses_and_routes_are_rejected(self):
-        address = {"family": "inet", "local": "192.0.2.1", "prefixlen": 24,
-                   "scope": "global"}
+        address = {
+            "family": "inet",
+            "local": "192.0.2.1",
+            "prefixlen": 24,
+            "scope": "global",
+        }
         for index in (0, 1):
             value = loopback_network(fallbacks=True)
             value["addresses"][index]["addr_info"].append(address)
@@ -1424,8 +1476,7 @@ class WorkerNetwork(unittest.TestCase):
             ("ipv4Routes", {"dst": "default", "dev": "lo"}),
             ("ipv4Routes", {"dst": "192.0.2.0/24", "dev": "lo", "table": 100}),
             ("ipv4Routes", {"dst": "127.0.0.1", "dev": "tunl0"}),
-            ("ipv4Routes", {"dst": "127.0.0.1", "dev": "lo",
-                            "gateway": "192.0.2.2"}),
+            ("ipv4Routes", {"dst": "127.0.0.1", "dev": "lo", "gateway": "192.0.2.2"}),
             ("ipv4Routes", {"dst": "127.0.0.1", "dev": "lo", "multipath": []}),
             ("ipv6Routes", {"dst": "ff00::/8", "dev": "lo"}),
         ):
@@ -1438,8 +1489,10 @@ class WorkerNetwork(unittest.TestCase):
         value = loopback_network(fallbacks=True)
         self.assertTrue(self.accepted(value))
         for field, configured in (
-            ("prefix", "2001:db8::"), ("prefixlen", 32),
-            ("relay_prefix", "192.0.2.0"), ("relay_prefixlen", 24),
+            ("prefix", "2001:db8::"),
+            ("prefixlen", 32),
+            ("relay_prefix", "192.0.2.0"),
+            ("relay_prefixlen", 24),
         ):
             fixture = copy.deepcopy(value)
             fixture["links"][2]["linkinfo"]["info_data"][field] = configured
@@ -1464,22 +1517,26 @@ class WorkerNetwork(unittest.TestCase):
 
     def test_network_queries_are_all_table_and_failures_are_diagnostic(self):
         value = loopback_network(fallbacks=True)
-        answers = [value[key] for key in (
-            "links", "addresses", "ipv4Routes", "ipv6Routes"
-        )]
+        answers = [
+            value[key] for key in ("links", "addresses", "ipv4Routes", "ipv6Routes")
+        ]
         with mock.patch.object(
-            boundary, "capture_ip",
+            boundary,
+            "capture_ip",
             side_effect=[json.dumps(row).encode() for row in answers],
         ) as query, mock.patch("builtins.print") as printer:
-            observation = boundary.worker_network(
-                [(row["ifindex"], row["ifname"]) for row in value["links"]]
-            )
+            observation = boundary.worker_network([
+                (row["ifindex"], row["ifname"]) for row in value["links"]
+            ])
         self.assertTrue(all(observation["checks"].values()))
         self.assertEqual(
             [call.args[0] for call in query.call_args_list],
-            [["-d", "link", "show"], ["addr", "show"],
-             ["-4", "route", "show", "table", "all"],
-             ["-6", "route", "show", "table", "all"]],
+            [
+                ["-d", "link", "show"],
+                ["addr", "show"],
+                ["-4", "route", "show", "table", "all"],
+                ["-6", "route", "show", "table", "all"],
+            ],
         )
         self.assertLessEqual(
             len(printer.call_args.args[0].encode()), boundary.MAX_NETWORK_JSON
@@ -1524,21 +1581,13 @@ class OriginalConsumerEvidence(unittest.TestCase):
         (self.root / "logs").mkdir()
         self.support = self.root / "support"
         self.support.mkdir()
-        self.plan = {
-            "selection": [
-                {
-                    "suite": "browser-chrome",
-                    "id": "browser/test.js",
-                    "minimumAssertions": 1,
-                },
-                {"suite": "xpcshell", "id": "xpcom/test.js", "minimumAssertions": 1},
-            ]
-        }
+        self.plan = read_json(SOURCE / PLAN_PATH)
+        schedule = native_schedule(self.plan)
         commands, cases = [], []
         for index, name in enumerate(PHASES):
             events = []
             if index >= 3:
-                case = self.plan["selection"][(index - 3) // 2]
+                _, case, _ = schedule[index - 3]
                 canary = name.endswith("assertion-canary")
                 test = case["id"]
                 events = [
@@ -1558,6 +1607,11 @@ class OriginalConsumerEvidence(unittest.TestCase):
                     },
                     {"action": "suite_end"},
                 ]
+                if not canary:
+                    events[2:3] = [
+                        dict(events[2], subtest=f"assert-{i}")
+                        for i in range(case["minimumAssertions"])
+                    ]
                 if canary and case["suite"] == "xpcshell":
                     events[2].update(
                         subtest="run_test",
@@ -1570,7 +1624,8 @@ class OriginalConsumerEvidence(unittest.TestCase):
                     )
             (self.root / "logs" / (name + ".stdout")).write_text(
                 "TEST-INFO | checking window state\nBrowser Chrome Test Summary\n"
-                if index >= 3 else ""
+                if index >= 3
+                else ""
             )
             (self.root / "logs" / (name + ".stderr")).write_bytes(b"")
             command = {
@@ -1629,8 +1684,95 @@ class OriginalConsumerEvidence(unittest.TestCase):
                 self.root, self.support, producer(), context()
             )
 
-    def test_four_original_pass_and_assertion_canaries(self):
+    def test_six_original_pass_and_assertion_canaries(self):
         self.assertEqual(self.check()["status"], "PASS")
+
+    def test_new_required_cases_cannot_be_missing_or_reordered(self):
+        for change in ("missing-tab", "missing-ini", "reordered", "duplicate"):
+            original = copy.deepcopy(self.value)
+            if change == "missing-tab":
+                self.value["cases"].pop(4)
+            elif change == "missing-ini":
+                self.value["cases"].pop(5)
+            elif change == "reordered":
+                self.value["cases"][4:6] = reversed(self.value["cases"][4:6])
+            else:
+                self.value["cases"][5] = self.value["cases"][4]
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.check()
+            self.value = original
+
+    def test_unchanged_manifest_canaries_are_installed_once_per_suite(self):
+        write_json(self.support / "plan.json", self.plan)
+        for case in self.plan["selection"]:
+            path = (
+                self.support
+                / Path(case["archivePath"]).parent
+                / Path(case["manifest"]).name
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((SOURCE / case["manifest"]).read_bytes())
+        original_tabs = file_digest(
+            self.support
+            / "mochitest/browser/browser/components/tabbrowser/test/browser/tabs/browser.toml"
+        )
+        changes = hosted.install_canaries(SOURCE, self.support, self.plan)
+        self.assertEqual(
+            [row["suite"] for row in changes], ["browser-chrome", "xpcshell"]
+        )
+        self.assertEqual(len(changes), 2)
+        self.assertEqual(
+            file_digest(
+                self.support
+                / "mochitest/browser/browser/components/tabbrowser/test/browser/tabs/browser.toml"
+            ),
+            original_tabs,
+        )
+        for _, case, canary in native_schedule(self.plan):
+            if canary:
+                selected = hosted.canary_case(
+                    case, self.support, {"canaryTransforms": changes}
+                )
+                self.assertTrue((self.support / selected["archivePath"]).is_file())
+
+    def test_finite_selection_rejects_weakened_or_extra_cases(self):
+        for change in ("fewer", "extra", "reorder", "weaker", "conditions", "untyped"):
+            plan = copy.deepcopy(self.plan)
+            if change == "fewer":
+                plan["selection"].pop()
+            elif change == "extra":
+                plan["selection"].append(plan["selection"][3])
+            elif change == "reorder":
+                plan["selection"][2:4] = reversed(plan["selection"][2:4])
+            elif change == "weaker":
+                plan["selection"][3]["minimumAssertions"] = 1
+            elif change == "conditions":
+                plan["selection"][2]["declaredConditions"] = {"skip-if": ["true"]}
+            else:
+                plan["selection"][0]["minimumAssertions"] = True
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                native_schedule(plan)
+
+    def test_failure_export_keeps_new_original_logs_and_rejects_arbitrary_outputs(self):
+        import shutil
+
+        campaign = self.root / "campaign"
+        output = campaign / "state/output"
+        output.mkdir(parents=True)
+        shutil.copytree(self.root / "logs", output / "logs")
+        plan = campaign / "recipe" / PLAN_PATH
+        plan.parent.mkdir(parents=True)
+        plan.write_bytes((SOURCE / PLAN_PATH).read_bytes())
+        with mock.patch.object(boundary, "protected", side_effect=lambda p: p):
+            rows = boundary.export_after_stop(campaign, False, context())
+        self.assertIn("logs/native-3-required.mozlog", {row["path"] for row in rows})
+        self.assertEqual(len(rows), 33)
+        shutil.rmtree(campaign / "export")
+        (output / "untrusted-output").write_text("not a permitted native receipt")
+        with mock.patch.object(
+            boundary, "protected", side_effect=lambda p: p
+        ), self.assertRaisesRegex(ValueError, "arbitrary"):
+            boundary.export_after_stop(campaign, False, context())
 
     def test_missing_original_case_or_command_rejected(self):
         self.value["cases"].pop()
@@ -1929,9 +2071,7 @@ class HostedPackagingDependencies(unittest.TestCase):
             "tools/geckoprocesstypes_generator/geckoprocesstypes",
         ):
             (support / name).mkdir(parents=True)
-        (support / "plan.json").write_bytes(
-            (SOURCE / ".github/qa/linux-proof-plan.json").read_bytes()
-        )
+        (support / "plan.json").write_bytes((SOURCE / PLAN_PATH).read_bytes())
         (support / "mozbase/setup_development.py").write_bytes(
             (SOURCE / "testing/mozbase/setup_development.py").read_bytes()
         )

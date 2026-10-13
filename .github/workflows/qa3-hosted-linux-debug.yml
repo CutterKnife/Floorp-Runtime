@@ -5,7 +5,7 @@ name: QA3 Hosted Debug to Cold Consumer
 
 'on':
   push:
-    branches: [codex/qa3-actions-native-proof-qa337-16]
+    branches: [codex/qa3-actions-native-proof-qa337-17]
 
 permissions:
   contents: read
@@ -16,7 +16,7 @@ jobs:
     if: >-
       github.repository == 'Floorp-Projects/Floorp-Runtime' &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/codex/qa3-actions-native-proof-qa337-16'
+      github.ref == 'refs/heads/codex/qa3-actions-native-proof-qa337-17'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -36,6 +36,9 @@ jobs:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             /.github/**
+            /browser/base/content/test/performance/browser.toml
+            /browser/components/tabbrowser/test/browser/tabs/browser.toml
+            /xpcom/tests/unit/xpcshell.toml
             /testing/mozbase/moz.build
             /testing/mozbase/setup_development.py
       - name: Fail-closed local contracts
