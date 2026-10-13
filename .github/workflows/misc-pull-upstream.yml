@@ -71,6 +71,10 @@ jobs:
             echo "change_type=unknown" >> $GITHUB_OUTPUT
           fi
 
+      - name: Preserve sync guard before branch switch
+        run: |
+          cp .github/workflows/scripts/upstream_sync.py "$RUNNER_TEMP/upstream_sync.py"
+
       - name: Check for existing PR
         id: check_pr
         uses: actions/github-script@v7
@@ -84,7 +88,7 @@ jobs:
               base: '${{ github.ref_name }}'
             });
 
-            const syncPR = pulls.data.find(pr => 
+            const syncPR = pulls.data.find(pr =>
               pr.title.match(/^sync: (MAJOR|MINOR|PATCH|no_version_change) upstream/) &&
               pr.user.login.includes('bot')
             );
@@ -108,7 +112,14 @@ jobs:
           git fetch origin "$BRANCH_NAME"
           git checkout "$BRANCH_NAME"
 
+      - name: Protect recorded source cohort
+        id: sync_guard
+        run: |
+          python3 "$RUNNER_TEMP/upstream_sync.py" guard \
+            --upstream ../upstream_release
+
       - name: Sync upstream files
+        if: steps.sync_guard.outputs.action == 'sync'
         run: |
           mv ../upstream_release/README.md ../upstream_release/MOZ_README.md
           rsync -a --delete \
@@ -120,6 +131,7 @@ jobs:
             ../upstream_release/ ./
 
       - name: Normalize patch files
+        if: steps.sync_guard.outputs.action == 'sync'
         run: |
           echo "Normalizing patch files..."
           find .github/patches/upstream -name "*.patch" \
@@ -132,39 +144,14 @@ jobs:
           done
 
       - name: Check patches compatibility
+        if: steps.sync_guard.outputs.action == 'sync'
         id: patch_check
         run: |
-          echo "Checking patches for compatibility..."
-          HAS_FAILED=0
-          FAILED_PATCHES=""
-
-          if [ -d ".github/patches/upstream" ]; then
-            for patch_file in .github/patches/upstream/*.patch; do
-              [ -e "$patch_file" ] || continue
-              patch_name=$(basename "$patch_file")
-
-              if git apply --check --ignore-space-change \
-                 --ignore-whitespace "$patch_file"; then
-                echo "✓ $patch_name applies cleanly"
-              else
-                echo "✗ $patch_name failed to apply"
-                FAILED_PATCHES="$FAILED_PATCHES\n- $patch_name"
-                HAS_FAILED=1
-              fi
-            done
-          fi
-
-          if [ "$HAS_FAILED" -ne 0 ]; then
-            echo "FAILED_PATCHES<<EOF" >> $GITHUB_ENV
-            echo -e "$FAILED_PATCHES" >> $GITHUB_ENV
-            echo "EOF" >> $GITHUB_ENV
-            echo "patch_failed=true" >> $GITHUB_OUTPUT
-          else
-            echo "All patches are compatible with upstream changes"
-            echo "patch_failed=false" >> $GITHUB_OUTPUT
-          fi
+          python3 "$RUNNER_TEMP/upstream_sync.py" check-patches
+          echo "patch_failed=false" >> $GITHUB_OUTPUT
 
       - name: Check if there are any changes
+        if: steps.sync_guard.outputs.action == 'sync'
         id: check_changes
         run: |
           if git diff --quiet --exit-code; then
@@ -176,26 +163,26 @@ jobs:
           fi
 
       - name: Commit to existing PR branch
-        if: steps.check_changes.outputs.has_changes == 'true' && steps.check_pr.outputs.exists == 'true'
+        if: steps.sync_guard.outputs.action == 'sync' && steps.check_changes.outputs.has_changes == 'true' && steps.check_pr.outputs.exists == 'true'
         run: |
           CHANGE_TYPE="${{ steps.version_diff.outputs.change_type }}"
           VERSION="${{ steps.new_version.outputs.version }}"
-          
+
           # Add all files including those in .gitignore
           git add --force .
-          
+
           if [ "$CHANGE_TYPE" = "no_version_change" ]; then
             git commit -m "sync: upstream gecko-dev (file changes without version change)"
           else
             git commit -m "sync: upstream gecko-dev $VERSION"
           fi
-          
+
           git push origin "${{ steps.check_pr.outputs.branch }}"
           echo "BRANCH_NAME=${{ steps.check_pr.outputs.branch }}" >> $GITHUB_ENV
           echo "UPDATE_EXISTING=true" >> $GITHUB_ENV
 
       - name: Create new PR branch
-        if: steps.check_changes.outputs.has_changes == 'true' && steps.check_pr.outputs.exists == 'false'
+        if: steps.sync_guard.outputs.action == 'sync' && steps.check_changes.outputs.has_changes == 'true' && steps.check_pr.outputs.exists == 'false'
         run: |
           if git diff --quiet --exit-code; then
             echo "No changes from upstream. Exiting."
@@ -205,32 +192,32 @@ jobs:
           CHANGE_TYPE="${{ steps.version_diff.outputs.change_type }}"
           VERSION="${{ steps.new_version.outputs.version }}"
           BASE_BRANCH="${{ github.ref_name }}"
-          
+
           if [ "$CHANGE_TYPE" = "no_version_change" ]; then
             BRANCH_NAME="sync/${BASE_BRANCH}/upstream-no-version-$(date +%Y%m%d-%H%M%S)"
           else
             BRANCH_NAME="sync/${BASE_BRANCH}/upstream-$VERSION"
           fi
-          
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH_NAME"
-          
+
           # Add all files including those in .gitignore
           git add --force .
-          
+
           if [ "$CHANGE_TYPE" = "no_version_change" ]; then
             git commit -m "sync: upstream gecko-dev (file changes without version change)"
           else
             git commit -m "sync: upstream gecko-dev $VERSION"
           fi
-          
+
           git push origin "$BRANCH_NAME"
           echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
           echo "UPDATE_EXISTING=false" >> $GITHUB_ENV
 
       - name: Update existing PR
-        if: steps.version_diff.outputs.change_type != 'none' && env.UPDATE_EXISTING == 'true'
+        if: steps.sync_guard.outputs.action == 'sync' && steps.version_diff.outputs.change_type != 'none' && env.UPDATE_EXISTING == 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -284,7 +271,7 @@ jobs:
             });
 
       - name: Create new Pull Request
-        if: steps.check_changes.outputs.has_changes == 'true' && steps.check_pr.outputs.exists == 'false'
+        if: steps.sync_guard.outputs.action == 'sync' && steps.check_changes.outputs.has_changes == 'true' && steps.check_pr.outputs.exists == 'false'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -300,16 +287,16 @@ jobs:
 
             if (changeType === 'no_version_change') {
               title = `sync: no_version_change upstream ${oldVersion}`;
-              
+
               body = `## Upstream Sync\n\n`;
               body += `- **Base branch**: ${baseBranch}\n`;
               body += `- **Current version**: ${oldVersion}\n`;
               body += `- **Change type**: File changes without version change\n\n`;
-              
+
               body += `## Version History\n\n`;
               body += `### File changes without version change\n`;
               body += `- Synced at: ${new Date().toISOString()}\n`;
-              
+
               if (patchFailed) {
                 body += `- ⚠️ Patch issues detected:\n${failedPatches}\n`;
               } else {
@@ -317,17 +304,17 @@ jobs:
               }
             } else {
               title = `sync: ${changeType} upstream ${oldVersion} → ${newVersion}`;
-              
+
               body = `## Upstream Sync\n\n`;
               body += `- **Base branch**: ${baseBranch}\n`;
               body += `- **Previous version**: ${oldVersion}\n`;
               body += `- **New version**: ${newVersion}\n`;
               body += `- **Change type**: ${changeType}\n\n`;
-              
+
               body += `## Version History\n\n`;
               body += `### ${newVersion}\n`;
               body += `- Synced at: ${new Date().toISOString()}\n`;
-              
+
               if (patchFailed) {
                 body += `- ⚠️ Patch issues detected:\n${failedPatches}\n`;
               } else {
