@@ -22,8 +22,20 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
-          sparse-checkout: .github
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/**
+            /python/mozbuild/**
+            /python/mozboot/**
+            /testing/mozbase/mozfile/**
+            /testing/mozbase/moz.build
+            /testing/mozbase/setup_development.py
+            /third_party/python/packaging/**
+            /third_party/python/six/**
       - name: Check generated profiles and source/profdata negative contracts
+        env:
+          PYTHONPATH: >-
+            python/mozbuild:python/mozboot:testing/mozbase/mozfile:third_party/python/packaging:third_party/python/six
         run: |
           mkdir -p "$RUNNER_TEMP/qa3-runtime"
           set +e

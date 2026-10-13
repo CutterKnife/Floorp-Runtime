@@ -2,22 +2,32 @@
 
 This recipe implements the QA3-02/03 source producer and a clean, separately
 booted test-bundle consumer. It is stacked on Runtime PR #83 and depends on the
-source contracts in Floorp PR #2889. The recipe has only a `workflow_call` entry.
-It is not connected to daily builds, release approval, signing, notarization or
-publication.
+source contracts in Floorp PR #2889. The private full-native recipe has only a
+`workflow_call` entry. A separate hosted campaign uses a creation-only push to
+`codex/qa3-actions-native-proof-qa337-16`, rejects reruns and updates, and records
+[run 38342884977, attempt 1](hosted-debug-evidence-20261013.md) at
+`d84cacd368a07b9f47506ea338e0ded6f54a1c05`. It is not connected to daily builds,
+release approval, signing, notarization or publication.
 
-The present evidence consists of source/Git fixtures, archive and process
-fixtures, mock REST responses, mozlog fixtures, and static workflow checks.
-No native build, packaged Mozilla harness, private launcher or offline dependency
-environment has been executed or qualified. The original implementation-kit ZIP
-has not been materialized; its reported 114 tests remain unverified.
+The hosted run adds actual Linux x64 Debug build and packaging evidence, cold
+offline dependency installation, two normal Mozilla harness cases and two
+assertion canaries to the existing fixtures. Original diagnostic ZIPs, exported
+file hashes, complete mozlogs and process receipts were independently checked.
+It demonstrates the hosted consumer boundary, not the separately provisioned
+private builder/consumer launcher. Original/repaired kit validation remains
+separate host evidence linked from the [foundation overview](README.md).
 
-Even a future successful limited consumer receipt keeps
-`nativeQualification=UNVERIFIED`, `productArtifactQualification=UNVERIFIED` and
-`publicationAuthorized=false`. This Linux x64 Debug proof cannot qualify a
-signed production artifact, a PGO build, Linux ARM production-opt, or another OS.
+The observed collection result is `PASS_DEBUG_HARNESS_ONLY`; its consumer receipt
+keeps `nativeProductQualification=UNVERIFIED` and
+`publicationAuthorized=false`. The broader private qualification model and
+signed product-artifact qualification remain unverified. This proof does not
+qualify a PGO build, Linux ARM production-opt, another OS or the Floorp overlay.
 
 ## Pinned subjects and source preparation
+
+The following full-native contracts remain requirements for the private recipe.
+The hosted run records its own profile and subjects in the linked evidence page;
+its receipts must not be silently converted into private qualifications.
 
 The controller must pin the reusable workflow and Runtime checkout by full Git
 SHA, together with the plan, both toolchain locks, offline Python environment
@@ -44,9 +54,11 @@ undeclared mutations fail closed.
 ## Required private worker boundary
 
 The private controller, workers, launcher and locks are operator prerequisites.
-This repository does not create credentials, users, sudo rules, cgroups or private
-runner infrastructure. Launch remains No-Go until that boundary is provisioned
-and separately reviewed, and a native run is explicitly authorized.
+Its full-native launch remains No-Go until that boundary is provisioned and
+separately reviewed, and a native run is explicitly authorized. The hosted
+`qa3_hosted_boundary.py` path instead creates an ephemeral nonroot consumer
+account and systemd scope on its authorized runner. Its successful scope receipt
+does not qualify the external private launcher or provision a private builder.
 
 The existing `/var/lib/qa3-tools/bin/launch-native-proof` must be root owned, nonwritable by
 controller and native users, and match the caller's SHA256. Its restricted
@@ -73,6 +85,11 @@ owner boundary; unit fixtures do not prove that the external launcher enforces i
 
 ## Resource and dependency prerequisites
 
+These capacities and locks describe the private full-native path. The hosted
+producer uses a standard GitHub Ubuntu 24.04 runner and the consumer uses an
+8-vCPU Blacksmith Ubuntu 24.04 runner; their observed receipts do not certify the
+private path's capacity requirements.
+
 Use an 8-core/32-GiB builder with at least 200 GiB SSD and 180 GiB initially free;
 after reserving/materializing source, the producer requires 140 GiB free. Use a
 4-core/16-GiB consumer with at least 120 GiB SSD and 100 GiB initially free; after
@@ -91,7 +108,10 @@ Git, make, zstd, xvfb-run, clang, clang++, rustc, cargo, ld.lld and prlimit; the
 consumer requires Python, Git, xvfb-run and prlimit. Git and prlimit must resolve
 to the fixed system paths. The offline environment must contain only a fully
 pinned, hashed `requirements.lock` and corresponding wheels, within 2 GiB.
-Its contents and cold import completeness remain unmeasured prerequisites.
+The hosted cold-venv, offline-install and pip-check commands succeeded with
+their pinned environment. The separately provisioned private environment
+remains a prerequisite. The received diagnostic copy does not include the full
+primary/support archives or wheel bytes for independent binary re-extraction.
 
 ## Bundle, harness and failure evidence
 

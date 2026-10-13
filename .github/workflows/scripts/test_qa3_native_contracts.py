@@ -475,9 +475,21 @@ class NativeContracts(unittest.TestCase):
     def test_xpcshell_api_adapter_disables_retry_and_preserves_native_exit_mapping(
         self,
     ):
+        support = self.root / "xpcshell-adapter-support"
+        test_root = support / "xpcshell/tests"
+        suite = test_root / "unit"
+        suite.mkdir(parents=True)
+        manifest = suite / "xpcshell.toml"
+        manifest.write_text('[DEFAULT]\n["test_fixture.js"]\n')
+        selected = suite / "test_fixture.js"
+        selected.write_text("function run_test() {}\n")
         parser = argparse.ArgumentParser()
         parser.set_defaults(
-            xpcshell="/explicit/helper", app_binary=None, interactive=False
+            xpcshell="/explicit/helper",
+            app_binary=None,
+            interactive=False,
+            manifest=str(manifest),
+            testPaths=[str(selected)],
         )
         observed = []
         for value, expected in ((True, 0), (False, 1), (4, 4)):
@@ -486,13 +498,21 @@ class NativeContracts(unittest.TestCase):
                 observed.append(options.retry) or value
             )
             harness = mock.Mock(TBPL_RETRY=4)
+            bound_manifest = object()
+            harness.TestManifest.return_value = bound_manifest
             harness.parser_desktop.return_value = parser
             harness.XPCShellTests.return_value = tests
             with mock.patch.object(sys, "argv", ["fixture"]), mock.patch.dict(
-                "os.environ", {"MOZ_AUTOMATION": "1"}
+                "os.environ",
+                {"MOZ_AUTOMATION": "1", "QA3_XPCSHELL_SUPPORT": str(support)},
+                clear=True,
             ):
                 self.assertEqual(run_xpcshell_once(harness), expected)
                 harness.symbolicate_profiles.assert_called_once()
+                harness.TestManifest.assert_called_once_with(
+                    [str(manifest)], strict=True, rootdir=str(test_root)
+                )
+                self.assertIs(tests.runTests.call_args.args[0].manifest, bound_manifest)
         self.assertEqual(observed, [False, False, False])
 
 
