@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: MPL-2.0
 
 import ast
+import contextlib
 import copy
+import errno
 import hashlib
 import io
 import json
 import os
 import re
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -1091,13 +1094,202 @@ class HostedBoundaries(unittest.TestCase):
         ), mock.patch.object(
             boundary.os, "getgid", return_value=900
         ), mock.patch.object(
+            boundary.os, "geteuid", return_value=900
+        ), mock.patch.object(
+            boundary.os, "getegid", return_value=900
+        ), mock.patch.object(
             Path,
             "read_text",
             return_value="NoNewPrivs:\t1\nCapEff:\t0000000000000000\n",
         ), mock.patch.object(
             boundary.os, "readlink", return_value="same"
-        ), self.assertRaises(ValueError):
+        ), self.assertRaisesRegex(ValueError, "namespace was not isolated"):
             boundary.verify_worker(spec)
+
+    def worker_verification(self, *, visible=False, interfaces=None, readable=None):
+        spec = {
+            "uid": 900,
+            "gid": 901,
+            "unit": "qa3-fixture.service",
+            "controllerPID": 1234,
+            "controllerPaths": ["/controller/recipe", "/controller/download"],
+            "controllerNamespaces": {
+                name: "controller-" + name for name in ("mnt", "net", "user")
+            },
+        }
+        proc = {
+            "/proc/self/status": "NoNewPrivs:\t1\nCapEff:\t0000000000000000\n",
+            "/proc/self/cgroup": "0::/system.slice/qa3-fixture.service\n",
+            "/proc/self/uid_map": "0 0 1\n900 900 1\n",
+            "/proc/self/gid_map": "0 0 1\n901 901 1\n",
+            "/proc/self/mountinfo": (
+                "1 2 0:3 / /proc rw,nosuid,nodev,noexec - proc proc "
+                "rw,hidepid=invisible\n"
+            ),
+        }
+        group = "/sys/fs/cgroup/system.slice/qa3-fixture.service/"
+        for name, value in (
+            ("memory.max", str(14 * GIB)),
+            ("memory.swap.max", "0"),
+            ("pids.max", "512"),
+            ("cpu.max", "400000 100000"),
+            ("memory.events", "oom 0\noom_kill 0\n"),
+        ):
+            proc[group + name] = value
+        mocks = [
+            mock.patch.object(boundary.os, "getuid", return_value=900),
+            mock.patch.object(boundary.os, "geteuid", return_value=900),
+            mock.patch.object(boundary.os, "getgid", return_value=901),
+            mock.patch.object(boundary.os, "getegid", return_value=901),
+            mock.patch.object(
+                boundary.os, "readlink", side_effect=lambda path: "worker-" + path[-3:]
+            ),
+            mock.patch.object(
+                boundary.socket, "if_nameindex",
+                return_value=[(1, "lo")] if interfaces is None else interfaces,
+            ),
+            mock.patch.object(
+                Path, "read_text", side_effect=lambda path, **kwargs: proc[str(path)],
+                autospec=True,
+            ),
+            mock.patch.object(Path, "exists", return_value=visible),
+            mock.patch.object(
+                Path, "open", side_effect=FileNotFoundError(errno.ENOENT, "hidden")
+            ),
+            mock.patch.object(
+                boundary.os, "access", side_effect=lambda path, mode: path == readable
+            ),
+        ]
+        return spec, proc, mocks
+
+    def test_worker_visibility_failure_reports_each_original_predicate(self):
+        for arguments, condition, message in (
+            ({"visible": True}, "controllerProcessHidden", "process remains visible"),
+            (
+                {"interfaces": [(1, "lo"), (2, "eth0")]},
+                "loopbackOnly", "network is not loopback-only",
+            ),
+            (
+                {"readable": "/controller/download"},
+                "controllerInputsUnreadable", "inputs remain readable",
+            ),
+        ):
+            spec, proc, mocks = self.worker_verification(**arguments)
+            with self.subTest(condition=condition), contextlib.ExitStack() as stack:
+                for patch in mocks:
+                    stack.enter_context(patch)
+                printer = stack.enter_context(mock.patch("builtins.print"))
+                with self.assertRaisesRegex(ValueError, message):
+                    boundary.verify_worker(spec)
+                observations = [
+                    json.loads(call.args[0]) for call in printer.call_args_list
+                ]
+                visibility = next(
+                    value for value in observations
+                    if value["schema"] == "qa3-worker-visibility-v1"
+                )
+                self.assertIs(visibility["checks"][condition], False)
+                self.assertIn("procMounts", visibility)
+                self.assertIn("uidMap", visibility)
+                self.assertIn("cgroup", visibility)
+                self.assertNotIn("nativeProductExecuted", visibility)
+
+    def test_worker_requires_effective_native_account_and_preserves_cgroup_limits(self):
+        spec, proc, mocks = self.worker_verification()
+        with contextlib.ExitStack() as stack:
+            for patch in mocks:
+                stack.enter_context(patch)
+            stack.enter_context(mock.patch("builtins.print"))
+            observed = boundary.verify_worker(spec)
+            self.assertEqual(observed["limits"]["memory.max"], str(14 * GIB))
+            with mock.patch.object(boundary.os, "geteuid", return_value=0):
+                with self.assertRaisesRegex(ValueError, "wrong native account"):
+                    boundary.verify_worker(spec)
+            key = "/sys/fs/cgroup/system.slice/qa3-fixture.service/cpu.max"
+            proc[key] = "max 100000"
+            with self.assertRaisesRegex(ValueError, "consumer limits differ"):
+                boundary.verify_worker(spec)
+
+    def test_boundary_probe_has_same_policy_and_distinct_worker_operation(self):
+        spec = {
+            "root": "/var/lib/qa3-hosted-boundary-probe/fixture",
+            "state": "/var/lib/qa3-hosted-boundary-probe/fixture/state",
+            "unit": "qa3-fixture.service",
+            "uid": 900,
+            "gid": 901,
+            "account": "qa3-boundary-probe",
+            "controllerPaths": ["/controller/recipe"],
+        }
+        native = boundary.service_command(spec)
+        probe = boundary.service_command(spec, "probe-worker")
+        self.assertEqual(
+            [arg for arg in native if arg != "worker"],
+            [arg for arg in probe if arg != "probe-worker"],
+        )
+        self.assertIn("--property=PrivateNetwork=yes", probe)
+        self.assertIn("--property=ProtectProc=invisible", probe)
+        self.assertIn("USER=qa3-boundary-probe", probe)
+
+    def test_boundary_probe_build_prerequisite_raw_recipe_and_artifact_bounds(self):
+        workflow = (SOURCE / ".github/workflows/qa3-hosted-linux-debug.yml").read_text()
+        preflight = workflow.split("  boundary-preflight:\n", 1)[1].split(
+            "  runtime:\n", 1
+        )[0]
+        self.assertIn("needs: contracts", preflight)
+        self.assertIn("runs-on: blacksmith-8vcpu-ubuntu-2404", preflight)
+        self.assertIn("timeout-minutes: 5", preflight)
+        self.assertIn("ref: ${{ github.sha }}", preflight)
+        self.assertIn("persist-credentials: false", preflight)
+        self.assertIn("GIT_NO_LAZY_FETCH", preflight)
+        self.assertIn("GIT_NO_REPLACE_OBJECTS", preflight)
+        self.assertIn("['rev-parse', 'HEAD']", preflight)
+        self.assertIn("['cat-file', 'blob', sha + ':' + relative]", preflight)
+        self.assertIn("raw != (source / relative).read_bytes()", preflight)
+        self.assertIn("os.O_EXCL | os.O_NOFOLLOW, 0o444", preflight)
+        self.assertIn("'qa3_hosted_boundary.py'), 'probe'", preflight)
+        self.assertIn("if: always()", preflight)
+        self.assertIn("/qa3-boundary-probe/*.json", preflight)
+        self.assertIn("/qa3-boundary-probe/*.stdout", preflight)
+        self.assertIn("/qa3-boundary-probe/*.stderr", preflight)
+        self.assertIn("retention-days: 1", preflight)
+        self.assertIn("compression-level: 0", preflight)
+        self.assertNotIn("overwrite:", preflight)
+        self.assertIn("needs: [contracts, context, boundary-preflight]", workflow)
+
+    def test_probe_worker_does_not_consume_or_claim_native_product_execution(self):
+        state = self.root / "probe-state"
+        state.mkdir()
+        spec = self.root / "probe-spec.json"
+        write_json(spec, {"boundaryProbe": True, "state": str(state)})
+        with (
+            mock.patch.object(boundary, "protected", side_effect=lambda path: path),
+            mock.patch.object(boundary, "verify_worker", return_value={}),
+            mock.patch.object(boundary, "consume") as consumer,
+            mock.patch.object(
+                sys, "argv", ["boundary", "probe-worker", "--spec", str(spec)]
+            ),
+        ):
+            boundary.main()
+        consumer.assert_not_called()
+        result = read_json(state / "probe-result.json")
+        self.assertEqual(result["status"], "PASS_BOUNDARY_ONLY")
+        self.assertIs(result["nativeProductExecuted"], False)
+        self.assertIs(result["publicationAuthorized"], False)
+        self.assertNotIn("context", result)
+
+    def test_foreign_probe_spec_rejected_before_worker_observation(self):
+        spec = self.root / "foreign-probe-spec.json"
+        write_json(spec, {})
+        with (
+            mock.patch.object(boundary, "protected", side_effect=lambda path: path),
+            mock.patch.object(boundary, "verify_worker") as worker,
+            mock.patch.object(
+                sys, "argv", ["boundary", "probe-worker", "--spec", str(spec)]
+            ),
+            self.assertRaisesRegex(ValueError, "foreign boundary probe"),
+        ):
+            boundary.main()
+        worker.assert_not_called()
 
     def test_whole_run_budget_counts_existing_duplicate_artifacts(self):
         primary = self.root / "bundle"

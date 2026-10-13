@@ -4,6 +4,8 @@
 """One disposable cold-consumer service; no builder or material publisher."""
 
 import argparse
+import errno
+import json
 import os
 import pwd
 import re
@@ -31,6 +33,7 @@ from qa3_native_io import GIB, capture_material_tree, read_json, write_json
 from qa3_source_cohort import file_digest
 
 ROOT = Path("/var/lib/qa3-hosted-consumer")
+PROBE_ROOT = Path("/var/lib/qa3-hosted-boundary-probe")
 FILES = (
     "qa3_hosted.py",
     "qa3_hosted_support.py",
@@ -84,7 +87,8 @@ def stage_inputs(source, destination):
         path.chmod(0o555 if path.is_dir() else 0o444)
 
 
-def service_command(spec):
+def service_command(spec, operation="worker"):
+    require(operation in {"worker", "probe-worker"}, "invalid native service operation")
     state = spec["state"]
     root = spec["root"]
     return [
@@ -132,8 +136,8 @@ def service_command(spec):
         "-i",
         "PATH=/usr/bin:/bin",
         "HOME=" + state + "/home",
-        "USER=qa3-native",
-        "LOGNAME=qa3-native",
+        "USER=" + spec.get("account", "qa3-native"),
+        "LOGNAME=" + spec.get("account", "qa3-native"),
         "LANG=C.UTF-8",
         "LC_ALL=C.UTF-8",
         "TZ=UTC",
@@ -142,41 +146,159 @@ def service_command(spec):
         "/usr/bin/python3.12",
         "-I",
         root + "/recipe/.github/workflows/scripts/qa3_hosted_boundary.py",
-        "worker",
+        operation,
         "--spec",
         root + "/spec.json",
     ]
 
 
-def verify_worker(spec):
-    require(
-        os.getuid() == spec["uid"] > 0 and os.getgid() == spec["gid"],
-        "wrong native account",
+def worker_visibility(spec):
+    interfaces = socket.if_nameindex()
+    process = Path(f"/proc/{spec['controllerPID']}")
+    process_reads = {}
+    for name in ("status", "cmdline", "environ", "maps"):
+        try:
+            with (process / name).open("rb") as stream:
+                pass
+            process_reads[name] = {"readable": True, "errno": None}
+        except OSError as exc:
+            process_reads[name] = {"readable": False, "errno": exc.errno}
+    paths = {
+        path: os.access(path, os.R_OK)
+        for path in (
+            *spec["controllerPaths"],
+            "/etc/shadow",
+            "/etc/gshadow",
+            "/run/credentials",
+            "/run/user",
+        )
+    }
+    proc_mounts = []
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        before, separator, after = line.partition(" - ")
+        fields, mount = before.split(), after.split()
+        if separator and len(fields) >= 6 and len(mount) >= 3 and fields[4] == "/proc":
+            proc_mounts.append({
+                "filesystem": mount[0],
+                "options": fields[5],
+                "superOptions": mount[2],
+            })
+    hidden_proc = (
+        len(proc_mounts) == 1
+        and proc_mounts[0]["filesystem"] == "proc"
+        and bool(
+            {"hidepid=2", "hidepid=invisible"}
+            & set(proc_mounts[0]["superOptions"].split(","))
+        )
     )
+    visible = process.exists()
+    checks = {
+        "loopbackOnly": interfaces == [(1, "lo")],
+        "controllerProcessHidden": not visible,
+        "controllerProcessUnreadable": all(
+            not item["readable"]
+            and item["errno"] in {errno.ENOENT, errno.EACCES, errno.EPERM}
+            for item in process_reads.values()
+        ),
+        "controllerInputsUnreadable": all(
+            not paths[path] for path in spec["controllerPaths"]
+        ),
+        "credentialPathsUnreadable": not any(paths.values()),
+        "procMountHidesOtherUsers": hidden_proc,
+    }
+    value = {
+        "schema": "qa3-worker-visibility-v1",
+        "checks": checks,
+        "interfaces": interfaces,
+        "controllerPID": spec["controllerPID"],
+        "controllerPIDVisible": visible,
+        "controllerProcessReads": process_reads,
+        "controllerPathsReadable": paths,
+        "procMounts": proc_mounts,
+        "uid": os.getuid(),
+        "effectiveUid": os.geteuid(),
+        "gid": os.getgid(),
+        "effectiveGid": os.getegid(),
+        "namespaces": {
+            name: os.readlink("/proc/self/ns/" + name)
+            for name in ("mnt", "net", "user")
+        },
+        "kernel": os.uname().release,
+        "cgroup": Path("/proc/self/cgroup").read_text()[:4096],
+        "uidMap": Path("/proc/self/uid_map").read_text()[:4096],
+        "gidMap": Path("/proc/self/gid_map").read_text()[:4096],
+        "controllerUidMap": spec.get("controllerUidMap"),
+        "controllerGidMap": spec.get("controllerGidMap"),
+        "nativeExecutionObservation": "NOT_CHECKED",
+        "publicationAuthorized": False,
+    }
+    encoded = json.dumps(value, sort_keys=True)
+    require(
+        len(encoded.encode()) <= 16384, "worker visibility diagnostic budget exceeded"
+    )
+    print(encoded, flush=True)
+    return value
+
+
+def verify_worker(spec):
     status = dict(
         line.split(":", 1)
         for line in Path("/proc/self/status").read_text().splitlines()
         if ":" in line
     )
+    namespaces = {
+        name: os.readlink("/proc/self/ns/" + name) for name in ("mnt", "net", "user")
+    }
+    security = json.dumps({
+        "schema": "qa3-worker-security-v1",
+        "uid": os.getuid(),
+        "effectiveUid": os.geteuid(),
+        "gid": os.getgid(),
+        "effectiveGid": os.getegid(),
+        "noNewPrivs": status.get("NoNewPrivs", "").strip(),
+        "effectiveCapabilities": status.get("CapEff", "").strip(),
+        "namespaces": namespaces,
+        "controllerNamespaces": spec["controllerNamespaces"],
+        "kernel": os.uname().release,
+        "cgroup": Path("/proc/self/cgroup").read_text()[:4096],
+        "nativeExecutionObservation": "NOT_CHECKED",
+        "publicationAuthorized": False,
+    }, sort_keys=True)
+    require(
+        len(security.encode()) <= 16384, "worker security diagnostic budget exceeded"
+    )
+    print(security, flush=True)
+    require(
+        os.getuid() == os.geteuid() == spec["uid"] > 0
+        and os.getgid() == os.getegid() == spec["gid"],
+        "wrong native account",
+    )
     require(
         status["NoNewPrivs"].strip() == "1" and int(status["CapEff"], 16) == 0,
         "worker retained privileges",
     )
-    namespaces = {
-        name: os.readlink("/proc/self/ns/" + name) for name in ("mnt", "net", "user")
-    }
     require(
         all(namespaces[n] != spec["controllerNamespaces"][n] for n in namespaces),
         "native mount, network or user namespace was not isolated",
     )
-    require(
-        socket.if_nameindex() == [(1, "lo")]
-        and not Path(f"/proc/{spec['controllerPID']}").exists()
-        and all(not os.access(path, os.R_OK) for path in spec["controllerPaths"]),
-        "native worker can observe controller process, network or inputs",
-    )
+    visibility = worker_visibility(spec)
+    for name, message in (
+        ("loopbackOnly", "native network is not loopback-only"),
+        ("controllerProcessHidden", "native controller process remains visible"),
+        (
+            "controllerProcessUnreadable",
+            "native controller process data remains readable",
+        ),
+        ("controllerInputsUnreadable", "native controller inputs remain readable"),
+        ("credentialPathsUnreadable", "native credential paths remain readable"),
+        ("procMountHidesOtherUsers", "native proc mount does not hide other users"),
+    ):
+        require(visibility["checks"][name], message)
     records = Path("/proc/self/cgroup").read_text().splitlines()
-    require(len(records) == 1 and records[0].startswith("0::/"), "non-unified cgroup")
+    require(
+        len(records) == 1 and records[0].startswith("0::/"),
+        "non-unified cgroup: " + repr(records)[:1024],
+    )
     relative = Path(records[0][3:])
     require(relative.name == spec["unit"], "wrong dedicated consumer service cgroup")
     group = Path("/sys/fs/cgroup") / str(relative).lstrip("/")
@@ -186,18 +308,250 @@ def verify_worker(spec):
         "pids.max": "512",
         "cpu.max": "400000 100000",
     }
-    require(
-        all(
-            (group / name).read_text().strip() == value
-            for name, value in expected.items()
-        ),
-        "consumer limits differ",
+    limits = {}
+    for name in expected:
+        try:
+            limits[name] = (group / name).read_text().strip()
+        except OSError as exc:
+            limits[name] = {"errno": exc.errno}
+    try:
+        events = dict(
+            line.split() for line in (group / "memory.events").read_text().splitlines()
+        )
+    except OSError as exc:
+        events = {"errno": exc.errno}
+    print(
+        json.dumps({
+            "schema": "qa3-worker-cgroup-v1",
+            "scope": str(relative),
+            "expected": expected,
+            "actual": limits,
+            "events": events,
+            "nativeExecutionObservation": "NOT_CHECKED",
+            "publicationAuthorized": False,
+        }, sort_keys=True),
+        flush=True,
     )
-    events = dict(
-        line.split() for line in (group / "memory.events").read_text().splitlines()
-    )
+    require(limits == expected, "consumer limits differ")
     require(events.get("oom") == events.get("oom_kill") == "0", "consumer OOM")
     return {"scope": str(relative), "limits": expected, "namespaces": namespaces}
+
+
+def probe_boundary(args):
+    require(os.geteuid() == 0, "root boundary probe preparation required")
+    recipe = args.recipe.resolve(strict=True)
+    output = args.output.absolute()
+    require(
+        not output.parent.resolve(strict=True).is_relative_to(recipe),
+        "boundary probe output must be outside the original recipe",
+    )
+    account = "qa3-boundary-probe"
+    try:
+        pwd.getpwnam(account)
+    except KeyError:
+        pass
+    else:
+        raise ValueError("dedicated boundary probe account already exists")
+    require(not PROBE_ROOT.exists(), "boundary probe root already exists")
+    head = raw_git(recipe, "rev-parse", "HEAD").decode().strip()
+    require(re.fullmatch(r"[0-9a-f]{40}", head), "invalid boundary probe recipe")
+    output.mkdir(mode=0o755)
+    make_directory(PROBE_ROOT)
+    root = PROBE_ROOT / (head[:12] + "-" + str(os.getpid()))
+    make_directory(root)
+    created_account = False
+    result = None
+    reason = None
+    spec = None
+    clean = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+
+    def cancelled(signum, frame):
+        raise KeyboardInterrupt
+
+    handlers = {s: signal.signal(s, cancelled) for s in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        for name in (
+            "recipe",
+            "recipe/.github",
+            "recipe/.github/workflows",
+            "recipe/.github/workflows/scripts",
+            "evidence",
+            "controller-inputs",
+        ):
+            make_directory(root / name)
+        for name in FILES:
+            relative = ".github/workflows/scripts/" + name
+            raw = raw_git(recipe, "cat-file", "blob", head + ":" + relative)
+            require(
+                raw == (recipe / relative).read_bytes(),
+                "boundary probe code differs from original raw Runtime recipe",
+            )
+            path = root / "recipe" / relative
+            path.write_bytes(raw)
+            path.chmod(0o444)
+        marker = root / "controller-inputs/credential-marker"
+        marker.write_text("QA3_BOUNDARY_CONTROLLED_MARKER\n")
+        marker.chmod(0o644)
+        subprocess.run(
+            [
+                "/usr/sbin/useradd",
+                "--system",
+                "--user-group",
+                "--no-log-init",
+                "--home-dir",
+                str(root / "state/home"),
+                "--shell",
+                "/usr/sbin/nologin",
+                account,
+            ],
+            check=True,
+            timeout=15,
+            env=clean,
+        )
+        created_account = True
+        native = pwd.getpwnam(account)
+        state = root / "state"
+        state.mkdir(mode=0o700)
+        os.chown(state, native.pw_uid, native.pw_gid)
+        spec = {
+            "profile": PROFILE,
+            "boundaryProbe": True,
+            "root": str(root),
+            "state": str(state),
+            "account": account,
+            "uid": native.pw_uid,
+            "gid": native.pw_gid,
+            "unit": "qa3-boundary-probe-" + str(os.getpid()) + ".service",
+            "controllerPID": os.getpid(),
+            "controllerNamespaces": {
+                name: os.readlink("/proc/self/ns/" + name)
+                for name in ("mnt", "net", "user")
+            },
+            "controllerUidMap": Path("/proc/self/uid_map").read_text()[:4096],
+            "controllerGidMap": Path("/proc/self/gid_map").read_text()[:4096],
+            "controllerPaths": [
+                str(recipe),
+                str(output.parent.resolve()),
+                str(root / "controller-inputs"),
+            ],
+        }
+        require(
+            all(not re.search(r"\s", path) for path in spec["controllerPaths"]),
+            "unsafe boundary probe controller path",
+        )
+        write_json(root / "spec.json", spec)
+        (root / "spec.json").chmod(0o444)
+        result = subprocess.run(
+            service_command(spec, "probe-worker"),
+            env=clean,
+            timeout=120,
+            check=False,
+        )
+        if result.returncode:
+            reason = "original boundary probe service failed"
+    except BaseException as exc:
+        reason = "boundary probe failed: " + type(exc).__name__
+    finally:
+        for sig in handlers:
+            signal.signal(sig, signal.SIG_IGN)
+        if spec is not None:
+            for action in (["kill", "--kill-whom=all", "--signal=KILL"], ["stop"]):
+                try:
+                    subprocess.run(
+                        ["/usr/bin/systemctl", *action, spec["unit"]],
+                        env=clean,
+                        timeout=15,
+                        check=False,
+                        capture_output=True,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    reason = reason or "boundary probe service cleanup failed"
+            try:
+                group = Path("/sys/fs/cgroup/system.slice") / spec["unit"]
+                require(
+                    not group.exists()
+                    or "populated 0"
+                    in (group / "cgroup.events").read_text().splitlines(),
+                    "boundary probe service retained children",
+                )
+                for entry in Path("/proc").iterdir():
+                    if entry.name.isdecimal():
+                        try:
+                            require(
+                                entry.stat().st_uid != spec["uid"],
+                                "boundary probe account retained processes",
+                            )
+                        except FileNotFoundError:
+                            pass
+            except (OSError, ValueError) as exc:
+                reason = (
+                    reason or "boundary probe cleanup rejected: " + type(exc).__name__
+                )
+        try:
+            for name in ("native.stdout", "native.stderr"):
+                path = root / "evidence" / name
+                if path.exists():
+                    info = path.lstat()
+                    require(
+                        stat.S_ISREG(info.st_mode)
+                        and info.st_uid == 0
+                        and info.st_nlink == 1
+                        and info.st_size <= 65536,
+                        "unsafe or oversized boundary probe diagnostic",
+                    )
+                    shutil.copyfile(path, output / name)
+                    (output / name).chmod(0o644)
+            if result is not None and result.returncode == 0 and reason is None:
+                worker = read_json(root / "state/probe-result.json", maximum=65536)
+                require(
+                    worker.get("schema") == "qa3-boundary-probe-worker-v1"
+                    and worker.get("status") == "PASS_BOUNDARY_ONLY"
+                    and worker.get("nativeProductExecuted") is False
+                    and worker.get("publicationAuthorized") is False,
+                    "boundary probe worker result is incomplete",
+                )
+                write_json(output / "worker-result.json", worker)
+                (output / "worker-result.json").chmod(0o644)
+        except (OSError, ValueError) as exc:
+            reason = reason or "boundary probe evidence rejected: " + type(exc).__name__
+        if created_account:
+            try:
+                deleted = subprocess.run(
+                    ["/usr/sbin/userdel", account],
+                    env=clean,
+                    timeout=15,
+                    check=False,
+                    capture_output=True,
+                )
+                if deleted.returncode:
+                    reason = reason or "boundary probe account cleanup failed"
+            except (OSError, subprocess.TimeoutExpired):
+                reason = reason or "boundary probe account cleanup failed"
+        try:
+            require(
+                root.resolve().parent == PROBE_ROOT.resolve(), "unsafe probe cleanup"
+            )
+            shutil.rmtree(root)
+            PROBE_ROOT.rmdir()
+        except (OSError, ValueError):
+            reason = reason or "boundary probe directory cleanup failed"
+        finally:
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
+    write_json(
+        output / "result.json",
+        {
+            "schema": "qa3-boundary-probe-v1",
+            "runtimeRecipe": head,
+            "status": "FAIL" if reason else "PASS_BOUNDARY_ONLY",
+            "reason": reason,
+            "serviceExit": None if result is None else result.returncode,
+            "nativeProductExecuted": False,
+            "publicationAuthorized": False,
+        },
+    )
+    (output / "result.json").chmod(0o644)
+    require(reason is None, "original boundary-only probe failed")
 
 
 def export_after_stop(root, complete, context):
@@ -364,6 +718,8 @@ def launch(args):
             name: os.readlink("/proc/self/ns/" + name)
             for name in ("mnt", "net", "user")
         },
+        "controllerUidMap": Path("/proc/self/uid_map").read_text()[:4096],
+        "controllerGidMap": Path("/proc/self/gid_map").read_text()[:4096],
         "controllerPaths": [str(args.recipe.resolve()), str(inputs.parent)],
     }
     require(
@@ -540,7 +896,9 @@ def collect(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=("launch", "worker", "collect"))
+    parser.add_argument(
+        "operation", choices=("launch", "worker", "collect", "probe", "probe-worker")
+    )
     parser.add_argument("--inputs", type=Path)
     parser.add_argument("--recipe", type=Path)
     parser.add_argument("--spec", type=Path)
@@ -549,6 +907,8 @@ def main():
     args = parser.parse_args()
     if args.operation == "launch":
         launch(args)
+    elif args.operation == "probe":
+        probe_boundary(args)
     elif args.operation == "collect":
         try:
             collect(args)
@@ -566,9 +926,23 @@ def main():
             raise
     else:
         spec = read_json(protected(args.spec))
+        if args.operation == "probe-worker":
+            require(spec.get("boundaryProbe") is True, "foreign boundary probe spec")
         observation = verify_worker(spec)
         state = Path(spec["state"])
         (state / "home").mkdir(mode=0o700)
+        if args.operation == "probe-worker":
+            write_json(
+                state / "probe-result.json",
+                {
+                    "schema": "qa3-boundary-probe-worker-v1",
+                    "status": "PASS_BOUNDARY_ONLY",
+                    "observation": observation,
+                    "nativeProductExecuted": False,
+                    "publicationAuthorized": False,
+                },
+            )
+            return
         try:
             result = consume(
                 Path(spec["root"]) / "inputs",
