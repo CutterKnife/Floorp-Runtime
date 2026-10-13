@@ -20,10 +20,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from qa3_hosted_support import (
+    PLAN_PATH,
     canary_case,
+    extra_packaged_materials,
     harness_argv,
     install_canaries,
     merge_materials,
+    native_schedule,
     stage_mochitest,
     verify_primary,
     verify_python_environment,
@@ -48,7 +51,7 @@ from qa3_source_cohort import file_digest, hash_value, verify_patches
 from runtime_build_context import derive_build_id, fetch_actions_run
 
 REPOSITORY = "Floorp-Projects/Floorp-Runtime"
-BRANCH = "codex/qa3-actions-native-proof-qa337-16"
+BRANCH = "codex/qa3-actions-native-proof-qa337-17"
 WORKFLOW = ".github/workflows/qa3-hosted-linux-debug.yml"
 PROFILE = "github-hosted-debug-to-blacksmith-consumer"
 SEED_SHA = "e084ba7bb4b62a0581266319bfefd7f671bdeb3e39e7f7149de9657cb97a718c"
@@ -406,8 +409,7 @@ def verify_recipe_metadata(recipe, value):
     require(
         read_json(recipe / ".github/runtime-upstream.json") == value["runtimeUpstream"]
         and read_json(recipe / ".github/qa/source-policy.json") == value["sourcePolicy"]
-        and file_digest(recipe / ".github/qa/linux-proof-plan.json")
-        == value["planSha256"],
+        and file_digest(recipe / PLAN_PATH) == value["planSha256"],
         "producer metadata differs from original Runtime recipe",
     )
 
@@ -433,12 +435,12 @@ def verify_support(support, value):
     require(
         plan.get("role") == "canonical-debug"
         and plan.get("target") == "x86_64-pc-linux-gnu"
-        and plan.get("publicationAuthorized") is False
-        and len(plan["selection"]) == 2
-        and [c["suite"] for c in plan["selection"]] == ["browser-chrome", "xpcshell"],
+        and plan.get("publicationAuthorized") is False,
         "finite required Debug selection differs",
     )
+    schedule = native_schedule(plan)
     source_hashes = {r["path"]: r["sha256"] for r in plan["sourceMaterials"]}
+    require(len(source_hashes) == len(plan["sourceMaterials"]), "duplicate source pin")
     for case in plan["selection"]:
         require(
             case["requiredNoSkip"] is True
@@ -447,8 +449,12 @@ def verify_support(support, value):
             and file_digest(support / case["archivePath"]) == source_hashes[case["id"]],
             "required packaged test differs from pinned source",
         )
-        canary_case(case, support, value)
+    require(len(value["canaryTransforms"]) == 2, "canary transform count differs")
+    for _, case, canary in schedule:
+        if canary:
+            canary_case(case, support, value)
     for source, archive in (
+        *extra_packaged_materials(),
         ("testing/mochitest/runtests.py", "mochitest/runtests.py"),
         ("testing/mochitest/mochitest_options.py", "mochitest/mochitest_options.py"),
         ("testing/xpcshell/runxpcshelltests.py", "xpcshell/runxpcshelltests.py"),
@@ -1071,16 +1077,15 @@ def produce(args):
         budget.release_tree(stage)
         if archive.parent == logs:
             budget.release_tree(archive)
-    plan = read_json(args.source / ".github/qa/linux-proof-plan.json")
+    plan = read_json(args.source / PLAN_PATH)
     for row in plan["sourceMaterials"]:
         require(
             file_digest(args.source / row["path"]) == row["sha256"],
             "actual source differs from pinned harness/test selection",
         )
+    native_schedule(plan)
     transforms = install_canaries(args.source, support, plan)
-    shutil.copyfile(
-        args.source / ".github/qa/linux-proof-plan.json", support / "plan.json"
-    )
+    shutil.copyfile(args.source / PLAN_PATH, support / "plan.json")
     python_sha = python_inputs(
         args.source, context["runtimeRecipe"], support / "python-environment"
     )
@@ -1407,82 +1412,73 @@ def consume(inputs, state, recipe, context):
         LD_LIBRARY_PATH=str(app) + ":" + str(support / "bin"),
     )
     cases = []
-    require(
-        len(plan["selection"]) == 2
-        and {c["suite"] for c in plan["selection"]} == {"browser-chrome", "xpcshell"},
-        "finite suites differ",
-    )
-    for index, case in enumerate(plan["selection"]):
-        for canary in (False, True):
-            selected = canary_case(case, support, value) if canary else case
-            name = f"native-{index}-{'assertion-canary' if canary else 'required'}"
-            raw_log = logs / (name + ".mozlog")
-            mochitest_root = None
-            copied_bytes = 0
-            if selected["suite"] == "browser-chrome":
-                before_copy = budget.used
-                mochitest_root = stage_mochitest(
-                    support, state / (name + "-harness") / "mochitest", budget
-                )
-                copied_bytes = budget.used - before_copy
-            argv = [
-                "/usr/bin/xvfb-run",
-                "-a",
-                *harness_argv(
-                    python,
-                    support,
-                    app,
-                    selected,
-                    state / (name + "-profile"),
-                    raw_log=raw_log,
-                    mochitest_root=mochitest_root,
-                ),
-            ]
-            if selected["suite"] == "xpcshell":
-                argv[4] = str(
-                    recipe / ".github/workflows/scripts/qa3_xpcshell_entry.py"
-                )
-                env["QA3_XPCSHELL_SUPPORT"] = str(support)
-                env.pop("QA3_MOCHITEST_ROOT", None)
-            else:
-                env.pop("QA3_XPCSHELL_SUPPORT", None)
-                env["QA3_MOCHITEST_ROOT"] = str(mochitest_root)
-            result = command(
-                name,
-                argv,
-                600,
-                # RLBox reserves 16 GiB of virtual space; the service still caps
-                # physical memory at 14 GiB with swap disabled.
-                memory=None,
-                allow_nonzero=canary,
-                watched_logs={raw_log.name: 16 * 1024**2},
-                io_budget=budget,
+    for name, case, canary in native_schedule(plan):
+        selected = canary_case(case, support, value) if canary else case
+        raw_log = logs / (name + ".mozlog")
+        mochitest_root = None
+        copied_bytes = 0
+        if selected["suite"] == "browser-chrome":
+            before_copy = budget.used
+            mochitest_root = stage_mochitest(
+                support, state / (name + "-harness") / "mochitest", budget
             )
-            raw_identity = raw_log_identity(raw_log)
-            require(
-                result.get("watchedLogs") == {raw_log.name: raw_identity},
-                "supervised raw mozlog differs",
+            copied_bytes = budget.used - before_copy
+        argv = [
+            "/usr/bin/xvfb-run",
+            "-a",
+            *harness_argv(
+                python,
+                support,
+                app,
+                selected,
+                state / (name + "-profile"),
+                raw_log=raw_log,
+                mochitest_root=mochitest_root,
+            ),
+        ]
+        if selected["suite"] == "xpcshell":
+            argv[4] = str(recipe / ".github/workflows/scripts/qa3_xpcshell_entry.py")
+            env["QA3_XPCSHELL_SUPPORT"] = str(support)
+            env.pop("QA3_MOCHITEST_ROOT", None)
+        else:
+            env.pop("QA3_XPCSHELL_SUPPORT", None)
+            env["QA3_MOCHITEST_ROOT"] = str(mochitest_root)
+        result = command(
+            name,
+            argv,
+            600,
+            # RLBox reserves 16 GiB of virtual space; the service still caps
+            # physical memory at 14 GiB with swap disabled.
+            memory=None,
+            allow_nonzero=canary,
+            watched_logs={raw_log.name: 16 * 1024**2},
+            io_budget=budget,
+        )
+        raw_identity = raw_log_identity(raw_log)
+        require(
+            result.get("watchedLogs") == {raw_log.name: raw_identity},
+            "supervised raw mozlog differs",
+        )
+        verdict = verify_mozlog(raw_log, selected, support, result, canary=canary)
+        if mochitest_root is not None:
+            current_bytes = sum(
+                path.stat().st_size
+                for path in mochitest_root.rglob("*")
+                if path.is_file() and not path.is_symlink()
             )
-            verdict = verify_mozlog(raw_log, selected, support, result, canary=canary)
-            if mochitest_root is not None:
-                current_bytes = sum(
-                    path.stat().st_size
-                    for path in mochitest_root.rglob("*")
-                    if path.is_file() and not path.is_symlink()
-                )
-                budget.consume(max(0, current_bytes - copied_bytes))
-                budget.release_tree(mochitest_root)
-            cases.append({
-                "name": name,
-                "suite": case["suite"],
-                "canary": canary,
-                "process": result,
-                "rawLog": {
-                    "path": "logs/" + raw_log.name,
-                    **raw_identity,
-                },
-                "mozlog": verdict,
-            })
+            budget.consume(max(0, current_bytes - copied_bytes))
+            budget.release_tree(mochitest_root)
+        cases.append({
+            "name": name,
+            "suite": case["suite"],
+            "canary": canary,
+            "process": result,
+            "rawLog": {
+                "path": "logs/" + raw_log.name,
+                **raw_identity,
+            },
+            "mozlog": verdict,
+        })
     require(
         capture_material_tree(support) == value["supportInventory"]
         and verify_primary(app_root, context) == value["primaryIdentity"],
@@ -1515,17 +1511,17 @@ def verify_consumer(output, support, producer, context):
         and value.get("publicationAuthorized") is False,
         "incomplete native result",
     )
+    plan = verify_support(support, producer)
+    schedule = native_schedule(plan)
     phases = [
         "cold-venv",
         "offline-install",
         "pip-check",
-        "native-0-required",
-        "native-0-assertion-canary",
-        "native-1-required",
-        "native-1-assertion-canary",
+        *(name for name, _, _ in schedule),
     ]
     require(
-        [r["name"] for r in value["commands"]] == phases and len(value["cases"]) == 4,
+        [r["name"] for r in value["commands"]] == phases
+        and len(value["cases"]) == len(schedule),
         "native phase skipped, duplicated or retried",
     )
     for command in value["commands"]:
@@ -1549,10 +1545,8 @@ def verify_consumer(output, support, producer, context):
             == command["stderrSha256"],
             "original native raw evidence differs",
         )
-    plan = verify_support(support, producer)
     for index, item in enumerate(value["cases"]):
-        case = plan["selection"][index // 2]
-        canary = bool(index % 2)
+        _, case, canary = schedule[index]
         selected = canary_case(case, support, producer) if canary else case
         command = value["commands"][index + 3]
         raw_name = command["name"] + ".mozlog"

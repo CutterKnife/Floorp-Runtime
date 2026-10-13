@@ -30,6 +30,9 @@ jobs:
             /python/mozbuild/**
             /python/mozboot/**
             /testing/mozbase/mozfile/**
+            /browser/base/content/test/performance/browser.toml
+            /browser/components/tabbrowser/test/browser/tabs/browser.toml
+            /xpcom/tests/unit/xpcshell.toml
             /testing/mozbase/moz.build
             /testing/mozbase/setup_development.py
             /testing/mochitest/runtests.py

@@ -32,6 +32,7 @@ from qa3_hosted import (
     verify_consumer,
     verify_recipe_metadata,
 )
+from qa3_hosted_support import PLAN_PATH, native_schedule
 from qa3_native_io import GIB, capture_material_tree, read_json, write_json
 from qa3_source_cohort import file_digest
 
@@ -53,7 +54,7 @@ FILES = (
 METADATA = (
     ".github/runtime-upstream.json",
     ".github/qa/source-policy.json",
-    ".github/qa/linux-proof-plan.json",
+    PLAN_PATH,
 )
 MAX_EXPORT = 128 * 1024**2
 MAX_NETWORK_JSON = 16384
@@ -113,7 +114,7 @@ def service_command(spec, operation="worker"):
         "--property=Group=" + str(spec["gid"]),
         "--property=KillMode=control-group",
         "--property=TimeoutStopSec=10s",
-        "--property=RuntimeMaxSec=3000s",
+        "--property=RuntimeMaxSec=1500s",
         "--property=CPUQuota=400%",
         "--property=CPUQuotaPeriodSec=100ms",
         f"--property=MemoryMax={14 * GIB}",
@@ -815,30 +816,21 @@ def export_after_stop(root, complete, context):
     make_directory(destination)
     make_directory(destination / "logs")
     output = root / "state/output"
+    schedule = native_schedule(read_json(root / "recipe" / PLAN_PATH))
+    phases = [
+        "cold-venv",
+        "offline-install",
+        "pip-check",
+        *(name for name, _, _ in schedule),
+    ]
     allowed = (
         {"consumer.json", "worker-failure.json"}
         | {
             f"logs/{phase}.{suffix}"
-            for phase in (
-                "cold-venv",
-                "offline-install",
-                "pip-check",
-                "native-0-required",
-                "native-0-assertion-canary",
-                "native-1-required",
-                "native-1-assertion-canary",
-            )
+            for phase in phases
             for suffix in ("stdout", "stderr", "process.json")
         }
-        | {
-            f"logs/{phase}.mozlog"
-            for phase in (
-                "native-0-required",
-                "native-0-assertion-canary",
-                "native-1-required",
-                "native-1-assertion-canary",
-            )
-        }
+        | {f"logs/{phase}.mozlog" for phase, _, _ in schedule}
     )
     rows = []
     total = 0
@@ -1011,7 +1003,7 @@ def launch(args):
     handlers = {s: signal.signal(s, cancelled) for s in (signal.SIGINT, signal.SIGTERM)}
     try:
         result = subprocess.run(
-            service_command(spec), env=clean, timeout=3060, check=False
+            service_command(spec), env=clean, timeout=1560, check=False
         )
         if result.returncode:
             first_failure = "native service failed"
@@ -1160,6 +1152,37 @@ def collect(args):
     )
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
         stream.write("verdict=PASS_DEBUG_HARNESS_ONLY\n")
+    consumer = read_json(destination / "export/consumer.json")
+    print(
+        json.dumps(
+            {
+                "schema": "qa3-hosted-verified-summary-v1",
+                "context": context,
+                "status": "PASS_DEBUG_HARNESS_ONLY",
+                "scopeEmpty": final["scopeEmpty"],
+                "serviceExit": final["serviceExit"],
+                "consumerSha256": file_digest(destination / "export/consumer.json"),
+                "rootReceiptSha256": file_digest(destination / "evidence/final.json"),
+                "producerBootSha256": consumer["producerBootSha256"],
+                "consumerBootSha256": consumer["consumerBootSha256"],
+                "cases": [
+                    {
+                        "name": case["name"],
+                        "suite": case["suite"],
+                        "canary": case["canary"],
+                        "exit": case["process"]["exit"],
+                        "ownedCleanupComplete": case["process"]["ownedCleanupComplete"],
+                        "rawLog": case["rawLog"],
+                        "mozlog": case["mozlog"],
+                    }
+                    for case in consumer["cases"]
+                ],
+                "nativeProductQualification": "UNVERIFIED",
+                "publicationAuthorized": False,
+            },
+            sort_keys=True,
+        )
+    )
 
 
 def main():

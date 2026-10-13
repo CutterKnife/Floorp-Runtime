@@ -16,6 +16,93 @@ from qa3_native_io import (
 )
 from qa3_source_cohort import file_digest, hash_value
 
+PLAN_PATH = ".github/qa/hosted-linux-debug-plan.json"
+TAB_ROOT = "browser/components/tabbrowser/test/browser/tabs"
+HOSTED_SELECTION = (
+    (
+        "browser-chrome",
+        "browser/base/content/test/performance/browser_hiddenwindow_existence.js",
+        1,
+    ),
+    ("xpcshell", "xpcom/tests/unit/test_nsIMutableArray.js", 1),
+    ("browser-chrome", TAB_ROOT + "/browser_pinned_and_hidden_tabs.js", 3),
+    ("xpcshell", "xpcom/tests/unit/test_iniParser.js", 100),
+)
+
+
+def native_schedule(plan):
+    selection = plan["selection"]
+    expected = []
+    for suite, identity, assertions in HOSTED_SELECTION:
+        directory = identity.rsplit("/", 1)[0]
+        prefix = (
+            "mochitest/browser/" if suite == "browser-chrome" else "xpcshell/tests/"
+        )
+        expected.append({
+            "suite": suite,
+            "id": identity,
+            "manifest": directory
+            + ("/browser.toml" if suite == "browser-chrome" else "/xpcshell.toml"),
+            "archivePath": prefix + identity,
+            "minimumAssertions": assertions,
+            "declaredConditions": {},
+            "requiredNoSkip": True,
+        })
+    if selection != expected or any(
+        type(case["minimumAssertions"]) is not int or case["requiredNoSkip"] is not True
+        for case in selection
+    ):
+        raise ValueError("finite required hosted Debug selection differs")
+    return tuple(
+        (
+            f"native-{index}-{'assertion-canary' if canary else 'required'}",
+            selection[index],
+            canary,
+        )
+        for index, canary in (
+            (0, False),
+            (0, True),
+            (1, False),
+            (1, True),
+            (2, False),
+            (3, False),
+        )
+    )
+
+
+def extra_packaged_materials():
+    tabs = (
+        "browser.toml",
+        "head.js",
+        "audio.ogg",
+        "dummy_page.html",
+        "file_mediaPlayback.html",
+        "helper_origin_attrs_testing.js",
+        "file_about_srcdoc.html",
+        "file_reader_mode_article.html",
+    )
+    ini = (
+        *(f"iniparser{index:02}.ini" for index in range(1, 18)),
+        *(f"iniparser{index:02}-utf8BOM.ini" for index in range(1, 17)),
+    )
+    return (
+        *(
+            (TAB_ROOT + "/" + name, "mochitest/browser/" + TAB_ROOT + "/" + name)
+            for name in tabs
+        ),
+        (
+            "browser/components/tabbrowser/test/TabGroupTestUtils.sys.mjs",
+            "modules/TabGroupTestUtils.sys.mjs",
+        ),
+        *(
+            (
+                "xpcom/tests/unit/data/" + name,
+                "xpcshell/tests/xpcom/tests/unit/data/" + name,
+            )
+            for name in ini
+        ),
+    )
+
 
 def verify_primary(root, context, *, app=None, object_root=None):
     app = app or root / "floorp"
@@ -64,7 +151,9 @@ def merge_materials(source, destination, budget):
 
 def install_canaries(source, support, plan):
     changes = []
-    for case in plan["selection"]:
+    for _, case, canary in native_schedule(plan):
+        if not canary:
+            continue
         name = (
             "browser_qa3_assertion.js"
             if case["suite"] == "browser-chrome"

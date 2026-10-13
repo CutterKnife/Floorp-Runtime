@@ -22,6 +22,7 @@ import qa3_bootstrap_probe as bootstrap_probe
 import qa3_hosted as hosted
 import qa3_hosted_boundary as boundary
 from qa3_build_profile import ac_options, enable_hosted_test_support, profile
+from qa3_hosted_support import PLAN_PATH, extra_packaged_materials, native_schedule
 from qa3_mozlog import verify_mozlog
 from qa3_native_io import GIB, IOBudget, extract_archive, read_json, write_json
 from qa3_native_transport import verify_artifact_metadata
@@ -46,6 +47,8 @@ PHASES = [
     "native-0-assertion-canary",
     "native-1-required",
     "native-1-assertion-canary",
+    "native-2-required",
+    "native-3-required",
 ]
 
 
@@ -867,6 +870,7 @@ class HostedContracts(unittest.TestCase):
             "--property=MemorySwapMax=0",
             "--property=TasksMax=512",
             "--property=CPUQuota=400%",
+            "--property=RuntimeMaxSec=1500s",
             "-i",
         ):
             self.assertIn(value, argv)
@@ -1572,21 +1576,13 @@ class OriginalConsumerEvidence(unittest.TestCase):
         (self.root / "logs").mkdir()
         self.support = self.root / "support"
         self.support.mkdir()
-        self.plan = {
-            "selection": [
-                {
-                    "suite": "browser-chrome",
-                    "id": "browser/test.js",
-                    "minimumAssertions": 1,
-                },
-                {"suite": "xpcshell", "id": "xpcom/test.js", "minimumAssertions": 1},
-            ]
-        }
+        self.plan = read_json(SOURCE / PLAN_PATH)
+        schedule = native_schedule(self.plan)
         commands, cases = [], []
         for index, name in enumerate(PHASES):
             events = []
             if index >= 3:
-                case = self.plan["selection"][(index - 3) // 2]
+                _, case, _ = schedule[index - 3]
                 canary = name.endswith("assertion-canary")
                 test = case["id"]
                 events = [
@@ -1606,6 +1602,11 @@ class OriginalConsumerEvidence(unittest.TestCase):
                     },
                     {"action": "suite_end"},
                 ]
+                if not canary:
+                    events[2:3] = [
+                        dict(events[2], subtest=f"assert-{i}")
+                        for i in range(case["minimumAssertions"])
+                    ]
                 if canary and case["suite"] == "xpcshell":
                     events[2].update(
                         subtest="run_test",
@@ -1678,8 +1679,200 @@ class OriginalConsumerEvidence(unittest.TestCase):
                 self.root, self.support, producer(), context()
             )
 
-    def test_four_original_pass_and_assertion_canaries(self):
+    def test_six_original_pass_and_assertion_canaries(self):
         self.assertEqual(self.check()["status"], "PASS")
+
+    def test_new_required_cases_cannot_be_missing_or_reordered(self):
+        for change in ("missing-tab", "missing-ini", "reordered", "duplicate"):
+            original = copy.deepcopy(self.value)
+            if change == "missing-tab":
+                self.value["cases"].pop(4)
+            elif change == "missing-ini":
+                self.value["cases"].pop(5)
+            elif change == "reordered":
+                self.value["cases"][4:6] = reversed(self.value["cases"][4:6])
+            else:
+                self.value["cases"][5] = self.value["cases"][4]
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.check()
+            self.value = original
+
+    def test_unchanged_manifest_canaries_are_installed_once_per_suite(self):
+        write_json(self.support / "plan.json", self.plan)
+        for case in self.plan["selection"]:
+            path = (
+                self.support
+                / Path(case["archivePath"]).parent
+                / Path(case["manifest"]).name
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((SOURCE / case["manifest"]).read_bytes())
+        original_tabs = file_digest(
+            self.support
+            / "mochitest/browser/browser/components/tabbrowser/test/browser/tabs/browser.toml"
+        )
+        changes = hosted.install_canaries(SOURCE, self.support, self.plan)
+        self.assertEqual(
+            [row["suite"] for row in changes], ["browser-chrome", "xpcshell"]
+        )
+        self.assertEqual(len(changes), 2)
+        self.assertEqual(
+            file_digest(
+                self.support
+                / "mochitest/browser/browser/components/tabbrowser/test/browser/tabs/browser.toml"
+            ),
+            original_tabs,
+        )
+        for _, case, canary in native_schedule(self.plan):
+            if canary:
+                selected = hosted.canary_case(
+                    case, self.support, {"canaryTransforms": changes}
+                )
+                self.assertTrue((self.support / selected["archivePath"]).is_file())
+
+    def test_finite_selection_rejects_weakened_or_extra_cases(self):
+        for change in ("fewer", "extra", "reorder", "weaker", "conditions", "untyped"):
+            plan = copy.deepcopy(self.plan)
+            if change == "fewer":
+                plan["selection"].pop()
+            elif change == "extra":
+                plan["selection"].append(plan["selection"][3])
+            elif change == "reorder":
+                plan["selection"][2:4] = reversed(plan["selection"][2:4])
+            elif change == "weaker":
+                plan["selection"][3]["minimumAssertions"] = 1
+            elif change == "conditions":
+                plan["selection"][2]["declaredConditions"] = {"skip-if": ["true"]}
+            else:
+                plan["selection"][0]["minimumAssertions"] = True
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                native_schedule(plan)
+
+    def test_new_required_skip_is_rejected_with_matching_process_and_raw_hashes(self):
+        for index in (4, 5):
+            original = copy.deepcopy(self.value)
+            name = self.value["cases"][index]["name"]
+            path = self.root / "logs" / (name + ".mozlog")
+            raw = path.read_bytes()
+            events = [json.loads(line) for line in raw.splitlines()]
+            events[-2]["status"] = "SKIP"
+            path.write_text("".join(json.dumps(e) + "\n" for e in events))
+            identity = hosted.raw_log_identity(path)
+            command = self.value["commands"][index + 3]
+            command["watchedLogs"] = {path.name: identity}
+            self.value["cases"][index]["rawLog"] = {
+                "path": "logs/" + path.name,
+                **identity,
+            }
+            receipt = self.root / "logs" / (name + ".process.json")
+            receipt.unlink()
+            write_json(receipt, command)
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                self.check()
+            self.value = original
+            path.write_bytes(raw)
+            receipt.unlink()
+            write_json(receipt, self.value["commands"][index + 3])
+
+    def test_new_support_bytes_remain_source_pinned_after_inventory_is_rejoined(self):
+        from qa3_native_io import capture_material_tree
+
+        bindings = (
+            [(case["id"], case["archivePath"]) for case in self.plan["selection"]]
+            + list(extra_packaged_materials())
+            + [
+                ("testing/mochitest/runtests.py", "mochitest/runtests.py"),
+                (
+                    "testing/mochitest/mochitest_options.py",
+                    "mochitest/mochitest_options.py",
+                ),
+                (
+                    "testing/xpcshell/runxpcshelltests.py",
+                    "xpcshell/runxpcshelltests.py",
+                ),
+                (
+                    "testing/xpcshell/xpcshellcommandline.py",
+                    "xpcshell/xpcshellcommandline.py",
+                ),
+                (
+                    "browser/base/content/test/performance/head.js",
+                    "mochitest/browser/browser/base/content/test/performance/head.js",
+                ),
+                (
+                    "xpcom/tests/unit/head_xpcom.js",
+                    "xpcshell/tests/xpcom/tests/unit/head_xpcom.js",
+                ),
+                (
+                    "xpcom/geckoprocesstypes_generator/geckoprocesstypes/__init__.py",
+                    "tools/geckoprocesstypes_generator/geckoprocesstypes/__init__.py",
+                ),
+                (
+                    "testing/mozbase/setup_development.py",
+                    "mozbase/setup_development.py",
+                ),
+            ]
+        )
+        plan = copy.deepcopy(self.plan)
+        for source, archive in bindings:
+            path = self.support / archive
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(source)
+            row = next(row for row in plan["sourceMaterials"] if row["path"] == source)
+            row["sha256"] = file_digest(path)
+        write_json(self.support / "plan.json", plan)
+        for name in ("gmp-fake", "gmp-fakeopenh264"):
+            path = self.support / "bin/plugins" / name / "1.0/plugin"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"same-build-plugin-fixture")
+        value = {
+            "supportInventory": capture_material_tree(self.support),
+            "planSha256": file_digest(self.support / "plan.json"),
+            "pythonEnvironmentSha256": DIGEST,
+            "canaryTransforms": [{}, {}],
+            "helpers": dict.fromkeys(
+                ("xpcshell", "ssltunnel", "certutil", "pk12util"), {}
+            ),
+        }
+        with mock.patch.object(hosted, "verify_python_environment"), mock.patch.object(
+            hosted, "canary_case"
+        ), mock.patch.object(hosted, "elf_identity", return_value={}):
+            self.assertEqual(hosted.verify_support(self.support, value), plan)
+            for archive in (
+                "modules/TabGroupTestUtils.sys.mjs",
+                "mochitest/browser/browser/components/tabbrowser/test/browser/tabs/head.js",
+                "mochitest/browser/browser/components/tabbrowser/test/browser/tabs/browser.toml",
+                "xpcshell/tests/xpcom/tests/unit/data/iniparser17.ini",
+                "xpcshell/tests/xpcom/tests/unit/data/iniparser16-utf8BOM.ini",
+            ):
+                path = self.support / archive
+                raw = path.read_bytes()
+                path.write_bytes(raw + b"changed")
+                value["supportInventory"] = capture_material_tree(self.support)
+                with self.subTest(archive=archive), self.assertRaises(ValueError):
+                    hosted.verify_support(self.support, value)
+                path.write_bytes(raw)
+                value["supportInventory"] = capture_material_tree(self.support)
+
+    def test_failure_export_keeps_new_original_logs_and_rejects_arbitrary_outputs(self):
+        import shutil
+
+        campaign = self.root / "campaign"
+        output = campaign / "state/output"
+        output.mkdir(parents=True)
+        shutil.copytree(self.root / "logs", output / "logs")
+        plan = campaign / "recipe" / PLAN_PATH
+        plan.parent.mkdir(parents=True)
+        plan.write_bytes((SOURCE / PLAN_PATH).read_bytes())
+        with mock.patch.object(boundary, "protected", side_effect=lambda p: p):
+            rows = boundary.export_after_stop(campaign, False, context())
+        self.assertIn("logs/native-3-required.mozlog", {row["path"] for row in rows})
+        self.assertEqual(len(rows), 33)
+        shutil.rmtree(campaign / "export")
+        (output / "untrusted-output").write_text("not a permitted native receipt")
+        with mock.patch.object(
+            boundary, "protected", side_effect=lambda p: p
+        ), self.assertRaisesRegex(ValueError, "arbitrary"):
+            boundary.export_after_stop(campaign, False, context())
 
     def test_missing_original_case_or_command_rejected(self):
         self.value["cases"].pop()
@@ -1978,9 +2171,7 @@ class HostedPackagingDependencies(unittest.TestCase):
             "tools/geckoprocesstypes_generator/geckoprocesstypes",
         ):
             (support / name).mkdir(parents=True)
-        (support / "plan.json").write_bytes(
-            (SOURCE / ".github/qa/linux-proof-plan.json").read_bytes()
-        )
+        (support / "plan.json").write_bytes((SOURCE / PLAN_PATH).read_bytes())
         (support / "mozbase/setup_development.py").write_bytes(
             (SOURCE / "testing/mozbase/setup_development.py").read_bytes()
         )
@@ -2370,7 +2561,13 @@ class HostedMozbaseArchiveShape(unittest.TestCase):
             row["path"]: row["sha256"]
             for row in read_json(self.support / "plan.json")["sourceMaterials"]
         }
-        metadata = {"testing/mozbase/moz.build", "testing/mozbase/setup_development.py"}
+        metadata = {
+            "testing/mozbase/moz.build",
+            "testing/mozbase/setup_development.py",
+            "browser/base/content/test/performance/browser.toml",
+            "browser/components/tabbrowser/test/browser/tabs/browser.toml",
+            "xpcom/tests/unit/xpcshell.toml",
+        }
         self.assertTrue(metadata <= source_hashes.keys())
         self.assertEqual(
             set(checkout["sparse-checkout"].splitlines()),

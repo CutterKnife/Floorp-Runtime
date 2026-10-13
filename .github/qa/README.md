@@ -8,6 +8,8 @@ cold-consumer run at an immutable code revision; see the
 Its result is `PASS_DEBUG_HARNESS_ONLY`, with
 `nativeProductQualification=UNVERIFIED` and `publicationAuthorized=false`.
 Production qualification and the publisher remain separate work.
+The [fixed hosted selection expansion](hosted-debug-expansion.md) describes the
+next limited campaign; its native verification remains pending at this revision.
 
 ## Canonical Debug and existing profiles
 
