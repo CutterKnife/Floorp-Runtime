@@ -383,7 +383,7 @@ class XpcshellManifestIdentity(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.support = Path(self.temp.name) / "support"
+        self.support = Path(self.temp.name).resolve() / "support"
         self.root = self.support / "xpcshell/tests"
         self.directory = self.root / "xpcom/tests/unit"
         self.directory.mkdir(parents=True)
