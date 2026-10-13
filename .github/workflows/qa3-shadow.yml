@@ -32,6 +32,9 @@ jobs:
             /testing/mozbase/mozfile/**
             /testing/mozbase/moz.build
             /testing/mozbase/setup_development.py
+            /testing/mochitest/runtests.py
+            /testing/xpcshell/runxpcshelltests.py
+            /testing/xpcshell/xpcshellcommandline.py
             /third_party/python/packaging/**
             /third_party/python/six/**
       - name: Check generated profiles and source/profdata negative contracts
@@ -42,8 +45,15 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/qa3-runtime"
           set +e
-          python3 -B -m unittest discover -s .github/workflows/scripts \
-          -p 'test_qa3_*.py' -v > "$RUNNER_TEMP/qa3-runtime/contracts.log" 2>&1
+          python3 -B - <<'PY' > "$RUNNER_TEMP/qa3-runtime/contracts.log" 2>&1
+          import sys
+          import unittest
+          suite = unittest.defaultTestLoader.discover(
+              '.github/workflows/scripts', pattern='test_qa3_*.py')
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          sys.exit(0 if result.wasSuccessful() and result.testsRun > 0
+                   and not result.skipped else 1)
+          PY
           status=$?
           printf '%s\n' "$status" > "$RUNNER_TEMP/qa3-runtime/contracts.exit-code"
           cat "$RUNNER_TEMP/qa3-runtime/contracts.log"
