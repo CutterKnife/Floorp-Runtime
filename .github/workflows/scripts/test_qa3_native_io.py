@@ -341,24 +341,27 @@ class NativeIOTests(unittest.TestCase):
             io_budget=budget,
         )
         self.assertEqual(budget.used, 11)
-        self.assertEqual(result["watchedLogs"], {
-            "fixture.mozlog": {
-                "bytes": 11,
-                "sha256": hashlib.sha256(b"firstsecond").hexdigest(),
-            }
-        })
+        self.assertEqual(
+            result["watchedLogs"],
+            {
+                "fixture.mozlog": {
+                    "bytes": 11,
+                    "sha256": hashlib.sha256(b"firstsecond").hexdigest(),
+                }
+            },
+        )
         self.assertEqual((self.root / "logs/fixture.stdout").read_bytes(), b"console\n")
         self.assertEqual((self.root / "logs/fixture.stderr").read_bytes(), b"notice\n")
         self.assertTrue(result["ownedCleanupComplete"])
 
     def test_watched_log_limit_stops_closed_pipes_and_reaps_detached_child(self):
         code = (
-            'import os,time; child=os.fork(); '
-            'os.setsid() if child==0 else None; '
+            "import os,time; child=os.fork(); "
+            "os.setsid() if child==0 else None; "
             'open("daemon.pid","w").write(str(os.getpid())) if child==0 else None; '
-            'time.sleep(30) if child==0 else None; '
+            "time.sleep(30) if child==0 else None; "
             'time.sleep(.1); open("logs/fixture.mozlog","wb").write(b"x"*200); '
-            'os.close(1); os.close(2); time.sleep(30)'
+            "os.close(1); os.close(2); time.sleep(30)"
         )
         with self.assertRaisesRegex(ValueError, "watched log byte limit"):
             self.command(code, watched_logs={"fixture.mozlog": 16})
@@ -375,9 +378,9 @@ class NativeIOTests(unittest.TestCase):
                 'open("logs/fixture.mozlog","wb").write(b"x"*20)',
                 watched_logs={"fixture.mozlog": 4},
             )
-        self.assertTrue(read_json(self.root / "logs/fixture.process.json")[
-            "ownedCleanupComplete"
-        ])
+        self.assertTrue(
+            read_json(self.root / "logs/fixture.process.json")["ownedCleanupComplete"]
+        )
 
     def test_watched_log_shrink_and_inode_replacement_are_rejected(self):
         for action in (
@@ -390,7 +393,8 @@ class NativeIOTests(unittest.TestCase):
                 self.command(
                     'import os,time; p="logs/watch.mozlog"; '
                     'open(p,"wb").write(b"initial"); time.sleep(.2); '
-                    + action + '; time.sleep(30)',
+                    + action
+                    + "; time.sleep(30)",
                     name="shrink" if "unlink" not in action else "replace",
                     watched_logs={"watch.mozlog": 64},
                 )
@@ -431,11 +435,13 @@ class NativeIOTests(unittest.TestCase):
                 ValueError, "single regular file"
             ):
                 self.command(
-                    'import os,time; ' + action + '; time.sleep(30)',
+                    "import os,time; " + action + "; time.sleep(30)",
                     name="unsafe" + str(index),
                     watched_logs={"watch.mozlog": 64},
                 )
-            receipt = read_json(self.root / "logs" / ("unsafe" + str(index) + ".process.json"))
+            receipt = read_json(
+                self.root / "logs" / ("unsafe" + str(index) + ".process.json")
+            )
             self.assertTrue(receipt["ownedCleanupComplete"])
             (self.root / "logs/watch.mozlog").unlink()
         self.assertEqual(target.read_bytes(), b"fixture bytes")
@@ -456,15 +462,22 @@ class NativeIOTests(unittest.TestCase):
                 io_budget=budget,
             )
         self.assertEqual(budget.used, 0)
-        self.assertTrue(read_json(self.root / "logs/fixture.process.json")[
-            "ownedCleanupComplete"
-        ])
+        self.assertTrue(
+            read_json(self.root / "logs/fixture.process.json")["ownedCleanupComplete"]
+        )
 
     def test_watched_log_names_and_caps_are_validated_before_fork(self):
         for limits in (
-            {"../outside": 1}, {"/outside": 1}, {"a/b": 1}, {"a\\b": 1},
-            {".": 1}, {"watch": True}, {"watch": 0}, {"watch": -1},
-            {"watch": "16"}, {"watch": 1.5},
+            {"../outside": 1},
+            {"/outside": 1},
+            {"a/b": 1},
+            {"a\\b": 1},
+            {".": 1},
+            {"watch": True},
+            {"watch": 0},
+            {"watch": -1},
+            {"watch": "16"},
+            {"watch": 1.5},
         ):
             with self.subTest(limits=limits), mock.patch.object(
                 qa3_native_io.os, "fork"
@@ -496,7 +509,9 @@ class NativeIOTests(unittest.TestCase):
 
         with mock.patch.object(qa3_native_io.subprocess, "Popen", side_effect=capture):
             self.command('print("bounded")')
-        self.assertIn("--as=" + str(28 * GIB), read_json(self.root / "executed.json")["argv"])
+        self.assertIn(
+            "--as=" + str(28 * GIB), read_json(self.root / "executed.json")["argv"]
+        )
 
     def test_burst_log_hard_cap_and_cumulative_budget(self):
         self.command('print("a" * 31)', name="first", log_limit=40)
@@ -1380,7 +1395,8 @@ class SupervisorBoundaryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.reply(valid, watched_logs=limits)
         for change in (
-            {}, {"other.mozlog": watched["fixture.mozlog"]},
+            {},
+            {"other.mozlog": watched["fixture.mozlog"]},
             {"fixture.mozlog": None},
             {"fixture.mozlog": {"bytes": True, "sha256": "c" * 64}},
             {"fixture.mozlog": {"bytes": -1, "sha256": "c" * 64}},

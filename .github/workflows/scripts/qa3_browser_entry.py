@@ -12,9 +12,13 @@ def run(harness):
     options = parser.parse_args()
     parser.validate(options)
     if (
-        options.flavor != "browser" or len(options.test_paths) != 1
-        or options.repeat or options.verify or options.verify_fission
-        or options.runUntilFailure or options.restartAfterFailure
+        options.flavor != "browser"
+        or len(options.test_paths) != 1
+        or options.repeat
+        or options.verify
+        or options.verify_fission
+        or options.runUntilFailure
+        or options.restartAfterFailure
     ):
         raise ValueError("fixed browser proof requires one execution of one test")
 
@@ -22,7 +26,8 @@ def run(harness):
         """Upstream retries failures only for its exact base class in automation."""
 
     logger_options = {
-        key: value for key, value in vars(options).items()
+        key: value
+        for key, value in vars(options).items()
         if key.startswith("log") or key == "valgrind"
     }
     runner = SinglePassMochitest(

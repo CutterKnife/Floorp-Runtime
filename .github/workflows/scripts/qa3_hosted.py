@@ -877,7 +877,8 @@ def verify_test_install(value, objdir):
         and type(value.get("expandedDirectoryCount")) is int
         and type(value.get("expandedFileCount")) is int
         and 0 <= value["expandedDirectoryCount"] <= value["expandedFileCount"]
-        and value["expandedDirectoryCount"] == len(value.get("expandedDirectories", [])),
+        and value["expandedDirectoryCount"]
+        == len(value.get("expandedDirectories", [])),
         "missing generated test-manifest normalization evidence",
     )
     hash_value(value["beforeSha256"])
@@ -965,9 +966,7 @@ def produce(args):
     )
     test_install = output / "test-install-manifest.json"
     source_before_tests = hashlib.sha256(
-        raw_git(
-            args.source, "diff", "--binary", "HEAD", "--", ".", ":(exclude).github"
-        )
+        raw_git(args.source, "diff", "--binary", "HEAD", "--", ".", ":(exclude).github")
     ).hexdigest()
     command(
         "prepare-test-install",
@@ -1464,9 +1463,7 @@ def consume(inputs, state, recipe, context):
                 result.get("watchedLogs") == {raw_log.name: raw_identity},
                 "supervised raw mozlog differs",
             )
-            verdict = verify_mozlog(
-                raw_log, selected, support, result, canary=canary
-            )
+            verdict = verify_mozlog(raw_log, selected, support, result, canary=canary)
             if mochitest_root is not None:
                 current_bytes = sum(
                     path.stat().st_size

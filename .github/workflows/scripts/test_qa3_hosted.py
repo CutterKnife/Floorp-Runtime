@@ -50,19 +50,31 @@ PHASES = [
 
 
 def loopback_network(fallbacks=False):
-    links = [{
-        "ifindex": 1, "ifname": "lo", "link_type": "loopback",
-        "flags": ["LOOPBACK", "UP", "LOWER_UP"], "operstate": "UNKNOWN",
-    }]
-    addresses = [{
-        "ifindex": 1, "ifname": "lo", "link_type": "loopback",
-        "addr_info": [
-            {"family": "inet", "local": "127.0.0.1", "prefixlen": 8,
-             "scope": "host"},
-            {"family": "inet6", "local": "::1", "prefixlen": 128,
-             "scope": "host"},
-        ],
-    }]
+    links = [
+        {
+            "ifindex": 1,
+            "ifname": "lo",
+            "link_type": "loopback",
+            "flags": ["LOOPBACK", "UP", "LOWER_UP"],
+            "operstate": "UNKNOWN",
+        }
+    ]
+    addresses = [
+        {
+            "ifindex": 1,
+            "ifname": "lo",
+            "link_type": "loopback",
+            "addr_info": [
+                {
+                    "family": "inet",
+                    "local": "127.0.0.1",
+                    "prefixlen": 8,
+                    "scope": "host",
+                },
+                {"family": "inet6", "local": "::1", "prefixlen": 128, "scope": "host"},
+            ],
+        }
+    ]
     if fallbacks:
         for index, (name, (kind, link_type)) in enumerate(
             boundary.FALLBACK_TUNNELS.items(), 2
@@ -71,24 +83,43 @@ def loopback_network(fallbacks=False):
             if name == "sit0":
                 data.update(ttl=64, prefix="2002::", prefixlen=16)
             links.append({
-                "ifindex": index, "ifname": name, "link_type": link_type,
-                "flags": ["NOARP"], "operstate": "DOWN", "link_index": 0,
+                "ifindex": index,
+                "ifname": name,
+                "link_type": link_type,
+                "flags": ["NOARP"],
+                "operstate": "DOWN",
+                "link_index": 0,
                 "linkinfo": {"info_kind": kind, "info_data": data},
             })
             addresses.append({
-                "ifindex": index, "ifname": name, "link_type": link_type,
+                "ifindex": index,
+                "ifname": name,
+                "link_type": link_type,
                 "addr_info": [],
             })
     return {
-        "queryErrors": {}, "links": links, "addresses": addresses,
+        "queryErrors": {},
+        "links": links,
+        "addresses": addresses,
         "ipv4Routes": [
-            {"type": "local", "dst": "127.0.0.0/8", "dev": "lo",
-             "table": "local", "scope": "host", "prefsrc": "127.0.0.1"},
-            {"type": "broadcast", "dst": "127.255.255.255", "dev": "lo",
-             "table": "local", "scope": "link", "prefsrc": "127.0.0.1"},
+            {
+                "type": "local",
+                "dst": "127.0.0.0/8",
+                "dev": "lo",
+                "table": "local",
+                "scope": "host",
+                "prefsrc": "127.0.0.1",
+            },
+            {
+                "type": "broadcast",
+                "dst": "127.255.255.255",
+                "dev": "lo",
+                "table": "local",
+                "scope": "link",
+                "prefsrc": "127.0.0.1",
+            },
         ],
-        "ipv6Routes": [{"type": "local", "dst": "::1", "dev": "lo",
-                        "table": "local"}],
+        "ipv6Routes": [{"type": "local", "dst": "::1", "dev": "lo", "table": "local"}],
     }
 
 
@@ -1189,18 +1220,28 @@ class HostedBoundaries(unittest.TestCase):
                 boundary.os, "readlink", side_effect=lambda path: "worker-" + path[-3:]
             ),
             mock.patch.object(
-                boundary.socket, "if_nameindex",
+                boundary.socket,
+                "if_nameindex",
                 return_value=[(1, "lo")] if interfaces is None else interfaces,
             ),
             mock.patch.object(
-                boundary, "capture_ip",
-                side_effect=lambda arguments, maximum: json.dumps(network[{
-                    "-d": "links", "addr": "addresses",
-                    "-4": "ipv4Routes", "-6": "ipv6Routes",
-                }[arguments[0]]]).encode(),
+                boundary,
+                "capture_ip",
+                side_effect=lambda arguments, maximum: json.dumps(
+                    network[
+                        {
+                            "-d": "links",
+                            "addr": "addresses",
+                            "-4": "ipv4Routes",
+                            "-6": "ipv6Routes",
+                        }[arguments[0]]
+                    ]
+                ).encode(),
             ),
             mock.patch.object(
-                Path, "read_text", side_effect=lambda path, **kwargs: proc[str(path)],
+                Path,
+                "read_text",
+                side_effect=lambda path, **kwargs: proc[str(path)],
                 autospec=True,
             ),
             mock.patch.object(Path, "exists", return_value=visible),
@@ -1218,11 +1259,13 @@ class HostedBoundaries(unittest.TestCase):
             ({"visible": True}, "controllerProcessHidden", "process remains visible"),
             (
                 {"interfaces": [(1, "lo"), (2, "eth0")]},
-                "loopbackOnly", "network is not loopback-only",
+                "loopbackOnly",
+                "network is not loopback-only",
             ),
             (
                 {"readable": "/controller/download"},
-                "controllerInputsUnreadable", "inputs remain readable",
+                "controllerInputsUnreadable",
+                "inputs remain readable",
             ),
         ):
             spec, proc, mocks = self.worker_verification(**arguments)
@@ -1236,7 +1279,8 @@ class HostedBoundaries(unittest.TestCase):
                     json.loads(call.args[0]) for call in printer.call_args_list
                 ]
                 visibility = next(
-                    value for value in observations
+                    value
+                    for value in observations
                     if value["schema"] == "qa3-worker-visibility-v1"
                 )
                 self.assertIs(visibility["checks"][condition], False)
@@ -1312,13 +1356,12 @@ class HostedBoundaries(unittest.TestCase):
         state.mkdir()
         spec = self.root / "probe-spec.json"
         write_json(spec, {"boundaryProbe": True, "state": str(state)})
-        with (
-            mock.patch.object(boundary, "protected", side_effect=lambda path: path),
-            mock.patch.object(boundary, "verify_worker", return_value={}),
-            mock.patch.object(boundary, "consume") as consumer,
-            mock.patch.object(
-                sys, "argv", ["boundary", "probe-worker", "--spec", str(spec)]
-            ),
+        with mock.patch.object(
+            boundary, "protected", side_effect=lambda path: path
+        ), mock.patch.object(
+            boundary, "verify_worker", return_value={}
+        ), mock.patch.object(boundary, "consume") as consumer, mock.patch.object(
+            sys, "argv", ["boundary", "probe-worker", "--spec", str(spec)]
         ):
             boundary.main()
         consumer.assert_not_called()
@@ -1331,14 +1374,11 @@ class HostedBoundaries(unittest.TestCase):
     def test_foreign_probe_spec_rejected_before_worker_observation(self):
         spec = self.root / "foreign-probe-spec.json"
         write_json(spec, {})
-        with (
-            mock.patch.object(boundary, "protected", side_effect=lambda path: path),
-            mock.patch.object(boundary, "verify_worker") as worker,
-            mock.patch.object(
-                sys, "argv", ["boundary", "probe-worker", "--spec", str(spec)]
-            ),
-            self.assertRaisesRegex(ValueError, "foreign boundary probe"),
-        ):
+        with mock.patch.object(
+            boundary, "protected", side_effect=lambda path: path
+        ), mock.patch.object(boundary, "verify_worker") as worker, mock.patch.object(
+            sys, "argv", ["boundary", "probe-worker", "--spec", str(spec)]
+        ), self.assertRaisesRegex(ValueError, "foreign boundary probe"):
             boundary.main()
         worker.assert_not_called()
 
@@ -1414,8 +1454,12 @@ class WorkerNetwork(unittest.TestCase):
                 self.assertFalse(self.accepted(fixture))
 
     def test_non_loopback_addresses_and_routes_are_rejected(self):
-        address = {"family": "inet", "local": "192.0.2.1", "prefixlen": 24,
-                   "scope": "global"}
+        address = {
+            "family": "inet",
+            "local": "192.0.2.1",
+            "prefixlen": 24,
+            "scope": "global",
+        }
         for index in (0, 1):
             value = loopback_network(fallbacks=True)
             value["addresses"][index]["addr_info"].append(address)
@@ -1424,8 +1468,7 @@ class WorkerNetwork(unittest.TestCase):
             ("ipv4Routes", {"dst": "default", "dev": "lo"}),
             ("ipv4Routes", {"dst": "192.0.2.0/24", "dev": "lo", "table": 100}),
             ("ipv4Routes", {"dst": "127.0.0.1", "dev": "tunl0"}),
-            ("ipv4Routes", {"dst": "127.0.0.1", "dev": "lo",
-                            "gateway": "192.0.2.2"}),
+            ("ipv4Routes", {"dst": "127.0.0.1", "dev": "lo", "gateway": "192.0.2.2"}),
             ("ipv4Routes", {"dst": "127.0.0.1", "dev": "lo", "multipath": []}),
             ("ipv6Routes", {"dst": "ff00::/8", "dev": "lo"}),
         ):
@@ -1438,8 +1481,10 @@ class WorkerNetwork(unittest.TestCase):
         value = loopback_network(fallbacks=True)
         self.assertTrue(self.accepted(value))
         for field, configured in (
-            ("prefix", "2001:db8::"), ("prefixlen", 32),
-            ("relay_prefix", "192.0.2.0"), ("relay_prefixlen", 24),
+            ("prefix", "2001:db8::"),
+            ("prefixlen", 32),
+            ("relay_prefix", "192.0.2.0"),
+            ("relay_prefixlen", 24),
         ):
             fixture = copy.deepcopy(value)
             fixture["links"][2]["linkinfo"]["info_data"][field] = configured
@@ -1464,22 +1509,26 @@ class WorkerNetwork(unittest.TestCase):
 
     def test_network_queries_are_all_table_and_failures_are_diagnostic(self):
         value = loopback_network(fallbacks=True)
-        answers = [value[key] for key in (
-            "links", "addresses", "ipv4Routes", "ipv6Routes"
-        )]
+        answers = [
+            value[key] for key in ("links", "addresses", "ipv4Routes", "ipv6Routes")
+        ]
         with mock.patch.object(
-            boundary, "capture_ip",
+            boundary,
+            "capture_ip",
             side_effect=[json.dumps(row).encode() for row in answers],
         ) as query, mock.patch("builtins.print") as printer:
-            observation = boundary.worker_network(
-                [(row["ifindex"], row["ifname"]) for row in value["links"]]
-            )
+            observation = boundary.worker_network([
+                (row["ifindex"], row["ifname"]) for row in value["links"]
+            ])
         self.assertTrue(all(observation["checks"].values()))
         self.assertEqual(
             [call.args[0] for call in query.call_args_list],
-            [["-d", "link", "show"], ["addr", "show"],
-             ["-4", "route", "show", "table", "all"],
-             ["-6", "route", "show", "table", "all"]],
+            [
+                ["-d", "link", "show"],
+                ["addr", "show"],
+                ["-4", "route", "show", "table", "all"],
+                ["-6", "route", "show", "table", "all"],
+            ],
         )
         self.assertLessEqual(
             len(printer.call_args.args[0].encode()), boundary.MAX_NETWORK_JSON
@@ -1503,10 +1552,9 @@ class WorkerNetwork(unittest.TestCase):
                 "sys.stdout.write('[]')\n"
             )
             fake.chmod(0o700)
-            with (
-                mock.patch.object(Path, "resolve", return_value=fake),
-                mock.patch.object(boundary, "protected", side_effect=lambda path: path),
-            ):
+            with mock.patch.object(
+                Path, "resolve", return_value=fake
+            ), mock.patch.object(boundary, "protected", side_effect=lambda path: path):
                 self.assertEqual(boundary.capture_ip(["link", "show"], 100), b"[]")
                 fake.write_text("#!/usr/bin/python3\nprint('x' * 10000)\n")
                 with self.assertRaisesRegex(ValueError, "output budget exceeded"):
@@ -1570,7 +1618,8 @@ class OriginalConsumerEvidence(unittest.TestCase):
                     )
             (self.root / "logs" / (name + ".stdout")).write_text(
                 "TEST-INFO | checking window state\nBrowser Chrome Test Summary\n"
-                if index >= 3 else ""
+                if index >= 3
+                else ""
             )
             (self.root / "logs" / (name + ".stderr")).write_bytes(b"")
             command = {

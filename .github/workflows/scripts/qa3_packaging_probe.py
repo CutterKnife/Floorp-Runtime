@@ -92,8 +92,8 @@ def probe(source, output):
     with (output.parent / "probe-fixture.tar.zst").open("xb") as stream:
         stream.write(compressed)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from qa3_test_install import probe_test_install
     from qa3_archive_probe import probe_archive_members
+    from qa3_test_install import probe_test_install
 
     test_install = probe_test_install(source, output.parent / "test-install-probe.json")
     archive_members = probe_archive_members(

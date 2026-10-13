@@ -74,15 +74,29 @@ subject and record the new packager separately.
 ## Shadow evidence, observed hosted run and remaining validation
 
 The standalone shadow workflow runs only contract tests and policy preflight on
-a `.github` checkout. Preflight deliberately emits `B/F=null`, upstream
+a sparse checkout containing `.github`, the pinned Mozilla harness files and
+their Python dependencies. Preflight deliberately emits `B/F=null`, upstream
 ingestion/native qualification **UNVERIFIED**, official Firefox match
 `unverified/advisory`, and `publicationAuthorized=false`. Its nonblocking result
 cannot replace existing native/build/source/packaging gates. Contract-test exit
 codes/logs and failed preflight receipts are preserved even on failure. A
 preflight object cannot satisfy the required common baseline schema.
 
+The complete host contract suite requires Linux process supervision support.
+Run the same command as shadow CI from the repository root on Ubuntu 24.04:
+
 ```sh
-python3 -B -m unittest discover -s .github/workflows/scripts -p 'test_qa3_*.py' -v
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=python/mozbuild:python/mozboot:testing/mozbase/mozfile:third_party/python/packaging:third_party/python/six \
+python3 -B - <<'PY'
+import sys
+import unittest
+suite = unittest.defaultTestLoader.discover(
+    '.github/workflows/scripts', pattern='test_qa3_*.py')
+result = unittest.TextTestRunner(verbosity=2).run(suite)
+sys.exit(0 if result.wasSuccessful() and result.testsRun > 0
+         and not result.skipped else 1)
+PY
 python3 -B .github/workflows/scripts/qa3_source_cohort.py \
   --expected-runtime FULL_GIT_SHA --output /tmp/new-qa3-preflight.json
 ```

@@ -168,7 +168,10 @@ class MozlogContracts(unittest.TestCase):
 
     def test_canonical_package_id_and_browser_chrome_uri(self):
         for suite, test in (
-            ("xpcshell", str((self.root / "xpcshell/tests").resolve()) + "/xpcom/test.js"),
+            (
+                "xpcshell",
+                str((self.root / "xpcshell/tests").resolve()) + "/xpcom/test.js",
+            ),
             ("browser-chrome", "chrome://mochitests/content/browser/xpcom/test.js"),
         ):
             self.case["suite"] = suite
@@ -283,21 +286,27 @@ class MozlogContracts(unittest.TestCase):
     def test_browser_canary_requires_frozen_task_and_exact_assertion_message(self):
         self.case["suite"] = "browser-chrome"
         assertion = {
-            "status": "FAIL", "expected": "PASS",
-            "subtest": "qa3_expected_assertion", "message": "QA3_EXPECTED_ASSERTION",
+            "status": "FAIL",
+            "expected": "PASS",
+            "subtest": "qa3_expected_assertion",
+            "message": "QA3_EXPECTED_ASSERTION",
         }
         events = copy.deepcopy(self.events)
         events[2].update(assertion)
         self.assertEqual(
             self.verify(events, canary=True, process={**self.process, "exit": 1})[
                 "verdict"
-            ], "EXPECTED_REJECTION",
+            ],
+            "EXPECTED_REJECTION",
         )
         for changes in (
-            {"subtest": "QA3_EXPECTED_ASSERTION"}, {"subtest": "other_task"},
+            {"subtest": "QA3_EXPECTED_ASSERTION"},
+            {"subtest": "other_task"},
             {"message": "prefix QA3_EXPECTED_ASSERTION"},
             {"message": "QA3_EXPECTED_ASSERTION - false"},
-            {"message": None}, {"expected": "FAIL"}, {"expected": None},
+            {"message": None},
+            {"expected": "FAIL"},
+            {"expected": None},
         ):
             events = copy.deepcopy(self.events)
             events[2].update({**assertion, **changes})
@@ -317,7 +326,8 @@ class MozlogContracts(unittest.TestCase):
             events[2].update(assertion)
             with self.subTest(extra=extra), self.assertRaises(ValueError):
                 self.verify(
-                    [*events[:-1], extra, events[-1]], canary=True,
+                    [*events[:-1], extra, events[-1]],
+                    canary=True,
                     process={**self.process, "exit": 1},
                 )
 

@@ -158,9 +158,7 @@ def stage_mochitest(support, destination, budget):
     return destination
 
 
-def harness_argv(
-    python, support, app, case, profile, *, raw_log, mochitest_root=None
-):
+def harness_argv(python, support, app, case, profile, *, raw_log, mochitest_root=None):
     test = support / case["archivePath"]
     if case["suite"] == "browser-chrome":
         mochitest_root = mochitest_root or support / "mochitest"

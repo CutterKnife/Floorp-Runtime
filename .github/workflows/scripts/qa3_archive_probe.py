@@ -80,11 +80,9 @@ def probe_archive_members(source, output):
         write_archive(archive, [(raw, data, mode) for raw, _, data, mode in fixtures])
         with tarfile.open(archive, "r:") as reader:
             members = reader.getmembers()
-            if (
-                [member.name for member in members]
-                != sorted(row[0] for row in fixtures)
-                or not all(member.isreg() for member in members)
-            ):
+            if [member.name for member in members] != sorted(
+                row[0] for row in fixtures
+            ) or not all(member.isreg() for member in members):
                 raise ValueError("Mozilla writer changed fixture member spelling")
         reject(archive, root / "strict", False)
         destination = root / "normalized"

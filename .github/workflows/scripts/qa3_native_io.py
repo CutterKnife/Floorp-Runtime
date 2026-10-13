@@ -355,9 +355,7 @@ def _run_owned(
                 raise ValueError("watched log is not a single regular file")
             identity = (info.st_dev, info.st_ino)
             if previous is None:
-                descriptor = os.open(
-                    path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-                )
+                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 try:
                     held = os.fstat(descriptor)
                     if (
@@ -626,7 +624,8 @@ def _run_owned(
         {
             filename: (
                 cleanup_call(
-                    lambda filename=filename: watched_receipt(filename), "WATCHED_LOG_HASH"
+                    lambda filename=filename: watched_receipt(filename),
+                    "WATCHED_LOG_HASH",
                 )
                 if filename in watched_state
                 else None
@@ -637,7 +636,9 @@ def _run_owned(
         else None
     )
     for item in watched_state.values():
-        cleanup_call(lambda item=item: os.close(item["descriptor"]), "WATCHED_LOG_CLOSE")
+        cleanup_call(
+            lambda item=item: os.close(item["descriptor"]), "WATCHED_LOG_CLOSE"
+        )
     result = {
         "name": name,
         "argv": argv,
@@ -792,7 +793,13 @@ def _supervisor_reply(reply, io_budget, expected, allow_nonzero, watched_logs=No
 
 
 def _supervise(
-    command, timeout, io_budget, *, expected=None, allow_nonzero=False, watched_logs=None
+    command,
+    timeout,
+    io_budget,
+    *,
+    expected=None,
+    allow_nonzero=False,
+    watched_logs=None,
 ):
     """Isolate orphan adoption; hard kill/stop recovery needs the external job scope."""
     if (

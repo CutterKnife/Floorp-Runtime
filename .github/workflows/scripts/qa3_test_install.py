@@ -139,9 +139,7 @@ def prepare_test_install(source, objdir, output):
             target = directory / relative
             resolved = target.resolve(strict=True)
             if not resolved.is_relative_to(source) or not resolved.is_file():
-                raise ValueError(
-                    "test support file escapes source or is not regular"
-                )
+                raise ValueError("test support file escapes source or is not regular")
             dest = _destination(directory_destination + "/" + relative, entry[0])
             replacement.add_link(str(target), dest)
             files.append({
@@ -313,18 +311,15 @@ def exercise_test_install(root, nested_objdir=False):
     }
     manifest.write(path=str(manifest_path))
     process_manifest(str(dest), [str(manifest_path)], str(track))
-    if (
-        (dest / "browser").exists()
-        or (dest / "unrelated.js").read_bytes() != b"qa3-unrelated\n"
-    ):
+    if (dest / "browser").exists() or (
+        dest / "unrelated.js"
+    ).read_bytes() != b"qa3-unrelated\n":
         raise ValueError("obsolete normalized support cleanup differs")
     for relative, data in payloads.items():
         if (source / "resources" / relative).read_bytes() != data:
             raise ValueError("obsolete support cleanup changed source")
     collision_root = root / "collision"
-    collision_source, collision_objdir, collision_manifest, _ = _fixture(
-        collision_root
-    )
+    collision_source, collision_objdir, collision_manifest, _ = _fixture(collision_root)
     collision = InstallManifest(path=str(collision_manifest))
     collision.add_link(
         str(collision_source / "unrelated.js"), "browser/resources/simple.html"
@@ -362,9 +357,7 @@ def exercise_test_install(root, nested_objdir=False):
 
 def probe_test_install(source, output):
     import mozbuild.action.process_install_manifest as action
-    import mozpack.copier as copier
-    import mozpack.files as files
-    import mozpack.manifests as manifests
+    from mozpack import copier, files, manifests
 
     source = Path(source).resolve(strict=True)
     output = _output_path(output, source)

@@ -35,9 +35,7 @@ class TestTestInstallManifest(unittest.TestCase):
             different.mkdir()
             (different / "parent-one.txt").write_bytes(b"conflicting content")
             manifest = InstallManifest(path=str(path))
-            manifest.add_pattern_link(
-                str(different), "*.txt", "another/../shared"
-            )
+            manifest.add_pattern_link(str(different), "*.txt", "another/../shared")
             manifest.write(path=str(path))
             before = path.read_bytes()
             with self.assertRaisesRegex(ValueError, "conflicting.*alias"):

@@ -16,9 +16,9 @@ def run(harness):
         or options.interactive
     ):
         raise ValueError("fixed proof requires explicit noninteractive xpcshell helper")
-    root = (
-        Path(os.environ["QA3_XPCSHELL_SUPPORT"]) / "xpcshell/tests"
-    ).resolve(strict=True)
+    root = (Path(os.environ["QA3_XPCSHELL_SUPPORT"]) / "xpcshell/tests").resolve(
+        strict=True
+    )
     if options.manifest is None or len(options.testPaths) != 1:
         raise ValueError("fixed proof requires one explicit xpcshell test and manifest")
     manifest = Path(options.manifest).resolve(strict=True)
