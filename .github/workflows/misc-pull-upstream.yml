@@ -74,6 +74,9 @@ jobs:
       - name: Preserve sync guard before branch switch
         run: |
           cp .github/workflows/scripts/upstream_sync.py "$RUNNER_TEMP/upstream_sync.py"
+          if [ -f .github/runtime-upstream.json ]; then
+            cp .github/runtime-upstream.json "$RUNNER_TEMP/upstream-sync-base.json"
+          fi
 
       - name: Check for existing PR
         id: check_pr
@@ -116,7 +119,8 @@ jobs:
         id: sync_guard
         run: |
           python3 "$RUNNER_TEMP/upstream_sync.py" guard \
-            --upstream ../upstream_release
+            --upstream ../upstream_release \
+            --base-manifest "$RUNNER_TEMP/upstream-sync-base.json"
 
       - name: Sync upstream files
         if: steps.sync_guard.outputs.action == 'sync'

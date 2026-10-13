@@ -28,11 +28,13 @@ def git(root, *args, env=None):
     return result.stdout.strip()
 
 
-def sync_action(root, upstream):
+def sync_action(root, upstream, base_manifest=None):
     current = git(upstream, "rev-parse", "HEAD")
     manifest = root / ".github/runtime-upstream.json"
     if not manifest.exists():
-        return "sync"
+        if base_manifest is None or not base_manifest.exists():
+            return "sync"
+        manifest = base_manifest
     recorded = json.loads(manifest.read_text())["upstream"]["commit"]
     if not isinstance(recorded, str) or not re.fullmatch(r"[0-9a-f]{40}", recorded):
         raise ValueError("Invalid recorded immutable upstream commit")
@@ -98,13 +100,14 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     guard = commands.add_parser("guard")
     guard.add_argument("--upstream", required=True, type=Path)
+    guard.add_argument("--base-manifest", type=Path)
     guard.add_argument("--output", type=Path, default=os.environ.get("GITHUB_OUTPUT"))
     commands.add_parser("check-patches")
     args = parser.parse_args()
     root = Path.cwd()
     try:
         if args.command == "guard":
-            action = sync_action(root, args.upstream)
+            action = sync_action(root, args.upstream, args.base_manifest)
             if args.output:
                 with args.output.open("a") as stream:
                     stream.write("action=" + action + "\n")

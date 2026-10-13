@@ -128,8 +128,93 @@ class UpstreamSyncTests(unittest.TestCase):
         self.assertFalse(output.exists())
         self.assertEqual(self.snapshot(), before)
 
+    def switch_to_unrecorded_pr(self):
+        unrecorded = git(self.runtime, "rev-parse", "HEAD")
+        manifest = self.pin(git(self.upstream, "rev-parse", "HEAD"))
+        commit(self.runtime)
+        saved = self.root / "base-manifest.json"
+        saved.write_bytes(manifest.read_bytes())
+        git(self.runtime, "checkout", "-qb", "legacy-pr", unrecorded)
+        save(self.runtime, "widget/cocoa/appshim/backend.mm", "native backend\n")
+        commit(self.runtime)
+        return saved
+
+    def test_recorded_base_survives_switch_to_unrecorded_pr(self):
+        saved = self.switch_to_unrecorded_pr()
+        self.assertFalse((self.runtime / ".github/runtime-upstream.json").exists())
+        before = self.snapshot()
+        output = self.root / "github-output"
+        result = self.cli(
+            "guard",
+            "--upstream",
+            str(self.upstream),
+            "--base-manifest",
+            str(saved),
+            "--output",
+            str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output.read_text(), "action=skip\n")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_recorded_base_rejects_advancement_after_branch_switch(self):
+        saved = self.switch_to_unrecorded_pr()
+        save(self.upstream, "source.txt", "advanced\n")
+        commit(self.upstream)
+        before = self.snapshot()
+        output = self.root / "github-output"
+        result = self.cli(
+            "guard",
+            "--upstream",
+            str(self.upstream),
+            "--base-manifest",
+            str(saved),
+            "--output",
+            str(output),
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("deliberate reintegration", result.stderr)
+        self.assertFalse(output.exists())
+        self.assertEqual(self.snapshot(), before)
+
+    def test_selected_recorded_pr_takes_precedence_over_base(self):
+        manifest = self.pin(git(self.upstream, "rev-parse", "HEAD"))
+        commit(self.runtime)
+        saved = self.root / "base-manifest.json"
+        saved.write_bytes(manifest.read_bytes())
+        git(self.runtime, "checkout", "-qb", "integrated-pr")
+        save(self.upstream, "source.txt", "advanced\n")
+        self.pin(commit(self.upstream))
+        commit(self.runtime)
+        before = self.snapshot()
+        output = self.root / "github-output"
+        result = self.cli(
+            "guard",
+            "--upstream",
+            str(self.upstream),
+            "--base-manifest",
+            str(saved),
+            "--output",
+            str(output),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output.read_text(), "action=skip\n")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_invalid_selected_pin_does_not_fall_back_to_valid_base(self):
+        saved = self.switch_to_unrecorded_pr()
+        self.pin("invalid")
+        result = self.cli(
+            "guard", "--upstream", str(self.upstream), "--base-manifest", str(saved)
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Invalid recorded", result.stderr)
+
     def test_unintegrated_checkout_can_sync(self):
-        self.assertEqual(sync_action(self.runtime, self.upstream), "sync")
+        self.assertEqual(
+            sync_action(self.runtime, self.upstream, self.root / "absent-base.json"),
+            "sync",
+        )
 
     def test_workflow_output_environment_is_supported(self):
         output = self.root / "github-output"
@@ -137,6 +222,8 @@ class UpstreamSyncTests(unittest.TestCase):
             "guard",
             "--upstream",
             str(self.upstream),
+            "--base-manifest",
+            str(self.root / "absent-base.json"),
             env={**os.environ, "GITHUB_OUTPUT": str(output)},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
